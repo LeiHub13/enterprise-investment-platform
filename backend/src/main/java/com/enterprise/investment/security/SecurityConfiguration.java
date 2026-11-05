@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.logout.HttpStatusReturningLogoutSuccessHandler;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 
 @Configuration
@@ -36,9 +37,10 @@ class SecurityConfiguration {
 
     @Bean
     SecurityFilterChain apiSecurity(HttpSecurity http, HttpSessionSecurityContextRepository contexts,
-                                    HttpSessionCsrfTokenRepository tokens) throws Exception {
+                                    HttpSessionCsrfTokenRepository tokens, AccountDirectory accounts) throws Exception {
         return http
                 .securityContext(context -> context.securityContextRepository(contexts))
+                .addFilterAfter(new AccountStateFilter(accounts), SecurityContextHolderFilter.class)
                 .csrf(csrf -> csrf.csrfTokenRepository(tokens))
                 .requestCache(cache -> cache.disable())
                 .authorizeHttpRequests(authorize -> authorize

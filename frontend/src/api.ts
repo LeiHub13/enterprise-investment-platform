@@ -1,6 +1,6 @@
 export type Role = 'ADMIN' | 'DATA_STEWARD' | 'INVESTMENT_MANAGER' | 'INVESTMENT_OFFICER'
-export type User = { id: number; username: string; role: Role }
-export type Value = string | number | null
+export type User = { id: number; username: string; role: Role; enabled?: boolean }
+export type Value = string | number | boolean | null
 export type RecordData = { id: number } & Record<string, Value>
 export type Page<T> = { items: T[]; total: number }
 

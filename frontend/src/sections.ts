@@ -158,6 +158,11 @@ export const sections: Record<SectionKey, Section> = {
     filters: [
       { key: 'keyword', label: '企业或项目名称' },
       { key: 'leadStatus', label: '线索阶段', kind: 'select', options: leadStages },
+      { key: 'due', label: '跟进时间', kind: 'select', options: [
+        { value: 'overdue', label: '已逾期' },
+        { value: 'today', label: '今日待跟进' },
+        { value: 'upcoming', label: '近七天待跟进' },
+      ] },
     ],
   },
   users: {
@@ -170,6 +175,7 @@ export const sections: Record<SectionKey, Section> = {
       { key: 'id', label: '账号编号', width: 100 },
       { key: 'username', label: '用户名', width: 200 },
       { key: 'role', label: '角色', width: 140 },
+      { key: 'enabled', label: '状态', width: 100 },
     ],
     fields: [
       { key: 'username', label: '用户名', required: true, max: 64, placeholder: '3 至 64 位字母、数字、点、下划线或短横线' },

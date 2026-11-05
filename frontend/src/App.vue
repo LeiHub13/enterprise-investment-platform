@@ -4,6 +4,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, ApiError, query } from './api'
 import type { Page, RecordData, User, Value } from './api'
 import EntityFields from './EntityFields.vue'
+import Dashboard from './Dashboard.vue'
+import ContactPanel from './ContactPanel.vue'
+import TagPanel from './TagPanel.vue'
+import EnterpriseHistory from './EnterpriseHistory.vue'
+import DataManagement from './DataManagement.vue'
 import { followupFields, leadStages, projectStatuses, roleLabels, roleOptions, sections } from './sections'
 import type { Field, Option, SectionKey } from './sections'
 
@@ -20,7 +25,18 @@ const starting = ref(true)
 const login = ref({ username: '', password: '' })
 const loginBusy = ref(false)
 const loginError = ref('')
+const passwordOpen = ref(false)
+const passwordBusy = ref(false)
+const passwordError = ref('')
+const passwordDraft = ref({ currentPassword: '', newPassword: '', confirmation: '' })
+const resetPasswordOpen = ref(false)
+const resetPasswordBusy = ref(false)
+const resetPasswordError = ref('')
+const resetPasswordDraft = ref({ password: '', confirmation: '' })
+const resetTarget = ref<RecordData | null>(null)
 const active = ref<SectionKey>('enterprises')
+const dashboardVisible = ref(true)
+const dataManagementVisible = ref(false)
 const section = computed(() => sections[active.value])
 const visibleSections = computed(() => Object.values(sections).filter(item => {
   if (item.key === 'enterprises') return true
@@ -80,6 +96,10 @@ const followupOpen = ref(false)
 const followupDraft = ref<Record<string, Value>>({})
 const followupError = ref('')
 const followupSaving = ref(false)
+const clearNextFollowup = ref(true)
+const contactOptions = ref<Option[]>([])
+const contactLoading = ref(false)
+let contactRequest = 0
 
 const importOpen = ref(false)
 const importFile = ref<File | null>(null)
@@ -111,7 +131,7 @@ function showError(error: unknown) {
 function signInReady(account: User) {
   user.value = account
   staff.value = []
-  selectSection('enterprises')
+  showDashboard()
 }
 
 onMounted(async () => {
@@ -156,6 +176,91 @@ async function signOut() {
   }
 }
 
+function openPassword() {
+  passwordDraft.value = { currentPassword: '', newPassword: '', confirmation: '' }
+  passwordError.value = ''
+  passwordOpen.value = true
+}
+
+async function changePassword() {
+  if (passwordBusy.value) return
+  if (!passwordDraft.value.currentPassword || !passwordDraft.value.newPassword) {
+    passwordError.value = '请填写原密码和新密码'
+    return
+  }
+  if (passwordDraft.value.newPassword !== passwordDraft.value.confirmation) {
+    passwordError.value = '两次输入的新密码不一致'
+    return
+  }
+  passwordBusy.value = true
+  passwordError.value = ''
+  try {
+    await api('/auth/password', 'PUT', {
+      currentPassword: passwordDraft.value.currentPassword,
+      newPassword: passwordDraft.value.newPassword,
+    })
+    passwordOpen.value = false
+    passwordDraft.value = { currentPassword: '', newPassword: '', confirmation: '' }
+    user.value = null
+    loginError.value = '密码已修改，请重新登录'
+  } catch (error) {
+    handleExpired(error)
+    passwordError.value = errorMessage(error)
+  } finally {
+    passwordBusy.value = false
+  }
+}
+
+function openResetPassword(row: RecordData) {
+  resetTarget.value = row
+  resetPasswordDraft.value = { password: '', confirmation: '' }
+  resetPasswordError.value = ''
+  resetPasswordOpen.value = true
+}
+
+async function resetUserPassword() {
+  if (!resetTarget.value || resetPasswordBusy.value) return
+  if (!resetPasswordDraft.value.password) {
+    resetPasswordError.value = '请填写新密码'
+    return
+  }
+  if (resetPasswordDraft.value.password !== resetPasswordDraft.value.confirmation) {
+    resetPasswordError.value = '两次输入的新密码不一致'
+    return
+  }
+  resetPasswordBusy.value = true
+  resetPasswordError.value = ''
+  try {
+    await api('/users/' + resetTarget.value.id + '/password', 'PUT', { password: resetPasswordDraft.value.password })
+    resetPasswordOpen.value = false
+    resetPasswordDraft.value = { password: '', confirmation: '' }
+    ElMessage.success('密码已重置，对方需要重新登录')
+  } catch (error) {
+    handleExpired(error)
+    resetPasswordError.value = errorMessage(error)
+  } finally {
+    resetPasswordBusy.value = false
+  }
+}
+
+async function toggleUser(row: RecordData) {
+  const enable = row.enabled === false || row.enabled === 0
+  try {
+    await ElMessageBox.confirm(`确定${enable ? '启用' : '停用'}账号 ${row.username} 吗？`, '账号状态', {
+      type: 'warning', confirmButtonText: enable ? '启用' : '停用', cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await api('/users/' + row.id + '/enabled', 'PUT', { enabled: enable })
+    ElMessage.success(enable ? '账号已启用' : '账号已停用')
+    await loadList()
+  } catch (error) {
+    showError(error)
+  }
+}
+
 async function loadList() {
   const request = ++listRequest
   loading.value = true
@@ -178,13 +283,38 @@ async function loadList() {
   }
 }
 
-function selectSection(key: SectionKey) {
+function showDashboard() {
+  listRequest++
+  detailOpen.value = false
+  dashboardVisible.value = true
+  dataManagementVisible.value = false
+}
+
+function showDataManagement() {
+  listRequest++
+  detailOpen.value = false
+  dashboardVisible.value = false
+  dataManagementVisible.value = true
+}
+
+function selectSection(key: SectionKey, initialFilters: Record<string, Value> = {}) {
+  dashboardVisible.value = false
+  dataManagementVisible.value = false
   active.value = key
   rows.value = []
   total.value = 0
-  filters.value = {}
+  filters.value = initialFilters
   page.value = 1
   void loadList()
+}
+
+function navigateFromDashboard(key: 'enterprises' | 'projects' | 'leads', due?: string) {
+  selectSection(key, due ? { due } : {})
+}
+
+function openDashboardLead(id: number) {
+  selectSection('leads')
+  void openDetail({ id })
 }
 
 function search() {
@@ -230,6 +360,7 @@ function display(row: RecordData, key: string): Value {
   if (key === 'projectStatus') return label(value, projectStatuses) ?? '—'
   if (key === 'leadStatus') return label(value, leadStages) ?? '—'
   if (key === 'role') return label(value, roleOptions) ?? '—'
+  if (key === 'enabled') return value === true || value === 1 ? '启用' : '停用'
   if (key === 'followupType') return label(value, followupFields[0].options ?? []) ?? '—'
   if (key.endsWith('At') && typeof value === 'string') return value.replace('T', ' ').slice(0, 19)
   return value == null || value === '' ? '—' : value
@@ -251,7 +382,7 @@ async function loadStaff() {
   if (!canAssign.value) return
   staff.value = await api<User[]>('/users')
   choices.value.ownerId = staff.value
-    .filter(account => account.role !== 'DATA_STEWARD')
+    .filter(account => account.role !== 'DATA_STEWARD' && account.enabled !== false)
     .map(account => ({ value: account.id, label: account.username + ' · ' + roleLabels[account.role] }))
 }
 
@@ -270,10 +401,10 @@ async function openEditor(row?: RecordData) {
       return [field.key, field.kind === 'datetime' && typeof value === 'string' ? value.slice(0, 19) : value]
     }))
     choices.value = {}
-    if (current?.enterpriseId != null) choices.value.enterpriseId = [
+    if (typeof current?.enterpriseId === 'number' || typeof current?.enterpriseId === 'string') choices.value.enterpriseId = [
       { value: current.enterpriseId, label: String(current.enterpriseName ?? current.enterpriseId) },
     ]
-    if (current?.projectId != null) choices.value.projectId = [
+    if (typeof current?.projectId === 'number' || typeof current?.projectId === 'string') choices.value.projectId = [
       { value: current.projectId, label: String(current.projectName ?? current.projectId) },
     ]
     if (section.value.fields.some(field => field.kind === 'user')) await loadStaff()
@@ -397,8 +528,37 @@ async function loadFollowups(next: number) {
 
 function openFollowup() {
   followupDraft.value = { followupType: 'PHONE' }
+  clearNextFollowup.value = true
+  contactOptions.value = []
   followupError.value = ''
   followupOpen.value = true
+  void searchFollowupContacts('')
+}
+
+async function searchFollowupContacts(keyword: string) {
+  const enterpriseId = detail.value?.enterpriseId
+  if (typeof enterpriseId !== 'number') return
+  const request = ++contactRequest
+  contactLoading.value = true
+  try {
+    const result = await api<Page<{ id: number; name: string; position: string | null }>>(
+      `/enterprises/${enterpriseId}/contacts` + query({ keyword, page: 1, size: 20 }),
+    )
+    if (request !== contactRequest || !followupOpen.value) return
+    const selected = contactOptions.value.find(option => option.value === followupDraft.value.contactId)
+    const options = result.items.map(contact => ({
+      value: contact.id, label: contact.name + (contact.position ? ' · ' + contact.position : ''),
+    }))
+    contactOptions.value = selected && !options.some(option => option.value === selected.value)
+      ? [selected, ...options] : options
+  } catch (error) {
+    if (request === contactRequest) {
+      handleExpired(error)
+      followupError.value = errorMessage(error)
+    }
+  } finally {
+    if (request === contactRequest) contactLoading.value = false
+  }
 }
 
 async function saveFollowup() {
@@ -407,7 +567,11 @@ async function saveFollowup() {
   followupError.value = ''
   try {
     const payload = formPayload(followupDraft.value, followupFields)
-    await api(sectionPath(detail.value.id) + '/followups', 'POST', payload)
+    await api(sectionPath(detail.value.id) + '/followups', 'POST', {
+      ...payload,
+      contactId: followupDraft.value.contactId ?? null,
+      clearNextFollowup: clearNextFollowup.value,
+    })
     followupOpen.value = false
     ElMessage.success('跟进已记录')
     await Promise.all([openDetail(detail.value), loadList()])
@@ -492,16 +656,21 @@ async function upload() {
       </div>
       <div class="nav-caption">业务模块</div>
       <nav aria-label="业务模块">
+        <button type="button" :class="{ active: dashboardVisible }" :aria-current="dashboardVisible ? 'page' : undefined"
+          @click="showDashboard"><span aria-hidden="true">◫</span>招商工作台</button>
         <button
           v-for="item in visibleSections"
           :key="item.key"
           type="button"
-          :class="{ active: active === item.key }"
-          :aria-current="active === item.key ? 'page' : undefined"
+          :class="{ active: !dashboardVisible && !dataManagementVisible && active === item.key }"
+          :aria-current="!dashboardVisible && !dataManagementVisible && active === item.key ? 'page' : undefined"
           @click="selectSection(item.key)"
         >
           <span aria-hidden="true">{{ item.glyph }}</span>{{ item.label }}
         </button>
+        <button v-if="user.role === 'ADMIN' || user.role === 'DATA_STEWARD'" type="button"
+          :class="{ active: dataManagementVisible }" :aria-current="dataManagementVisible ? 'page' : undefined"
+          @click="showDataManagement"><span aria-hidden="true">数</span>数据管理</button>
       </nav>
     </aside>
 
@@ -511,11 +680,16 @@ async function upload() {
         <div class="account">
           <strong>{{ user.username }}</strong>
           <el-tag effect="plain" type="info">{{ roleLabels[user.role] }}</el-tag>
+          <el-button text @click="openPassword">修改密码</el-button>
           <el-button text @click="signOut">退出</el-button>
         </div>
       </header>
 
       <main class="main">
+        <Dashboard v-if="dashboardVisible" @navigate="navigateFromDashboard"
+          @open-lead="openDashboardLead" @expired="handleExpired" />
+        <DataManagement v-else-if="dataManagementVisible" @expired="handleExpired" />
+        <template v-else>
         <div class="page-heading">
           <div>
             <h1>{{ section.label }}</h1>
@@ -573,6 +747,17 @@ async function upload() {
                 <el-button v-if="canDelete" link type="danger" @click="removeRecord(row)">删除</el-button>
               </template>
             </el-table-column>
+            <el-table-column v-else label="操作" min-width="160" fixed="right">
+              <template #default="{ row }">
+                <template v-if="row.id !== user.id">
+                  <el-button link type="primary" @click="openResetPassword(row)">重置密码</el-button>
+                  <el-button link :type="row.enabled ? 'danger' : 'primary'" @click="toggleUser(row)">
+                    {{ row.enabled ? '停用' : '启用' }}
+                  </el-button>
+                </template>
+                <span v-else class="muted">当前账号</span>
+              </template>
+            </el-table-column>
           </el-table>
           <div v-if="active !== 'users'" class="pagination">
             <el-pagination
@@ -582,6 +767,7 @@ async function upload() {
             />
           </div>
         </section>
+        </template>
       </main>
     </div>
 
@@ -610,6 +796,12 @@ async function upload() {
             <div><dt>创建时间</dt><dd>{{ display(detail, 'createdAt') }}</dd></div>
             <div><dt>更新时间</dt><dd>{{ display(detail, 'updatedAt') }}</dd></div>
           </dl>
+          <TagPanel v-if="active === 'enterprises'" :key="'tags-' + detail.id"
+            :enterprise-id="detail.id" :can-edit="canWrite" @expired="handleExpired" />
+          <ContactPanel v-if="user.role !== 'DATA_STEWARD' && (active === 'enterprises' || active === 'leads')"
+            :key="String(active === 'enterprises' ? detail.id : detail.enterpriseId)"
+            :enterprise-id="Number(active === 'enterprises' ? detail.id : detail.enterpriseId)"
+            :can-delete="canAssign" @expired="handleExpired" />
           <section v-if="active === 'leads'" class="followups" aria-labelledby="followup-heading">
             <div class="followup-heading">
               <h3 id="followup-heading">跟进记录</h3>
@@ -623,6 +815,7 @@ async function upload() {
                   <span>{{ display(entry, 'createdByUsername') }} · {{ display(entry, 'createdAt') }}</span>
                 </header>
                 <p>{{ entry.content }}</p>
+                <small v-if="entry.contactName">联系人 · {{ entry.contactName }}</small>
                 <small v-if="entry.result">结果 · {{ entry.result }}</small>
                 <small v-if="entry.nextAction">下一步 · {{ entry.nextAction }}</small>
                 <small v-if="entry.nextFollowupAt">下次跟进 · {{ display(entry, 'nextFollowupAt') }}</small>
@@ -631,14 +824,52 @@ async function upload() {
                 :page-size="10" layout="prev, pager, next" @current-change="loadFollowups" />
             </div>
           </section>
+          <EnterpriseHistory v-if="active === 'enterprises'" :key="'history-' + detail.id"
+            :enterprise-id="detail.id" @expired="handleExpired" />
         </template>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="passwordOpen" title="修改密码" width="min(480px, 94vw)"
+      :close-on-click-modal="false" :close-on-press-escape="!passwordBusy" :show-close="!passwordBusy">
+      <el-form label-position="top" @submit.prevent="changePassword">
+        <el-form-item label="原密码" required><el-input v-model="passwordDraft.currentPassword" type="password" show-password autocomplete="current-password" /></el-form-item>
+        <el-form-item label="新密码" required><el-input v-model="passwordDraft.newPassword" type="password" show-password autocomplete="new-password" placeholder="至少 12 个字符，最多 72 个 UTF-8 字节" /></el-form-item>
+        <el-form-item label="再次输入新密码" required><el-input v-model="passwordDraft.confirmation" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-alert v-if="passwordError" :title="passwordError" type="error" :closable="false" show-icon />
+        <div class="dialog-actions">
+          <el-button :disabled="passwordBusy" @click="passwordOpen = false">取消</el-button>
+          <el-button type="primary" native-type="submit" :loading="passwordBusy">修改并重新登录</el-button>
+        </div>
+      </el-form>
+    </el-dialog>
+
+    <el-dialog v-model="resetPasswordOpen" title="重置账号密码" width="min(480px, 94vw)"
+      :close-on-click-modal="false" :close-on-press-escape="!resetPasswordBusy" :show-close="!resetPasswordBusy">
+      <el-form label-position="top" @submit.prevent="resetUserPassword">
+        <p>为 {{ resetTarget?.username }} 设置新密码，对方需要重新登录。</p>
+        <el-form-item label="新密码" required><el-input v-model="resetPasswordDraft.password" type="password" show-password autocomplete="new-password" placeholder="至少 12 个字符，最多 72 个 UTF-8 字节" /></el-form-item>
+        <el-form-item label="再次输入新密码" required><el-input v-model="resetPasswordDraft.confirmation" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-alert v-if="resetPasswordError" :title="resetPasswordError" type="error" :closable="false" show-icon />
+        <div class="dialog-actions">
+          <el-button :disabled="resetPasswordBusy" @click="resetPasswordOpen = false">取消</el-button>
+          <el-button type="primary" native-type="submit" :loading="resetPasswordBusy">重置密码</el-button>
+        </div>
+      </el-form>
+    </el-dialog>
 
     <el-dialog v-model="followupOpen" title="新增跟进记录" width="min(620px, 94vw)"
       :close-on-click-modal="false" :close-on-press-escape="!followupSaving" :show-close="!followupSaving">
       <el-form label-position="top" @submit.prevent="saveFollowup">
         <EntityFields v-model="followupDraft" :fields="followupFields" />
+        <el-form-item label="联系人">
+          <el-select v-model="followupDraft.contactId" filterable remote clearable :value-on-clear="null"
+            :remote-method="searchFollowupContacts" :loading="contactLoading" placeholder="输入姓名搜索"
+            @visible-change="(visible: boolean) => visible && searchFollowupContacts('')">
+            <el-option v-for="option in contactOptions" :key="option.value" v-bind="option" />
+          </el-select>
+        </el-form-item>
+        <el-checkbox v-model="clearNextFollowup">没有填写下次跟进时间时，清除原提醒</el-checkbox>
         <el-alert v-if="followupError" :title="followupError" type="error" :closable="false" show-icon />
         <div class="dialog-actions">
           <el-button :disabled="followupSaving" @click="followupOpen = false">取消</el-button>

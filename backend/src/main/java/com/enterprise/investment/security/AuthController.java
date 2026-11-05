@@ -19,9 +19,11 @@ import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
@@ -69,10 +71,30 @@ class AuthController {
         return account;
     }
 
+    @PutMapping("/password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void changePassword(@Valid @RequestBody PasswordChange input,
+                        @AuthenticationPrincipal AccountPrincipal actor, HttpServletRequest request) {
+        if (!AccountDirectory.fitsBcrypt(input.currentPassword())
+                || !AccountDirectory.isNewPasswordValid(input.newPassword())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "新密码至少 12 个字符，且最多 72 个 UTF-8 字节");
+        }
+        accounts.changeOwnPassword(actor, input.currentPassword(), input.newPassword());
+        SecurityContextHolder.clearContext();
+        var session = request.getSession(false);
+        if (session != null) {
+            session.invalidate();
+        }
+    }
+
     record Credentials(@NotBlank @Pattern(regexp = AccountDirectory.USERNAME_PATTERN) String username,
                        @NotBlank @Size(max = 72) String password) {
     }
 
     record CsrfResponse(String headerName, String token) {
+    }
+
+    record PasswordChange(@NotBlank @Size(max = 72) String currentPassword,
+                          @NotBlank @Size(min = 12, max = 72) String newPassword) {
     }
 }

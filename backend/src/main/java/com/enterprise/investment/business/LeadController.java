@@ -42,12 +42,14 @@ public class LeadController {
             LEFT JOIN sys_user u ON l.owner_id = u.id
             """;
     private static final String FOLLOWUP_FIELDS = """
-            f.id, f.lead_id, f.followup_type, f.content, f.result, f.next_action, f.next_followup_at,
+            f.id, f.lead_id, f.contact_id, c.name AS contact_name,
+            f.followup_type, f.content, f.result, f.next_action, f.next_followup_at,
             f.created_by, u.username AS created_by_username, f.created_at
             """;
     private static final String FOLLOWUP_FROM = """
             FROM crm_followup f
             JOIN crm_lead l ON f.lead_id = l.id
+            LEFT JOIN crm_contact c ON f.contact_id = c.id
             LEFT JOIN sys_user u ON f.created_by = u.id
             """;
     private final BusinessData db;
@@ -62,9 +64,13 @@ public class LeadController {
                                   @RequestParam(required = false) Long enterpriseId,
                                   @RequestParam(required = false) Long projectId,
                                   @RequestParam(required = false) Long ownerId,
+                                  @RequestParam(required = false) String due,
                                   @RequestParam(defaultValue = "1") int page,
                                   @RequestParam(defaultValue = "20") int size,
                                   @AuthenticationPrincipal AccountPrincipal actor) {
+        if (due != null && !List.of("overdue", "today", "upcoming").contains(due)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "待跟进筛选条件无效");
+        }
         return db.page(FIELDS, FROM, """
                  WHERE (:scopeOwner IS NULL OR l.owner_id = :scopeOwner)
                    AND (:keyword IS NULL OR e.name LIKE :keyword ESCAPE '!' OR p.project_name LIKE :keyword ESCAPE '!')
@@ -72,9 +78,19 @@ public class LeadController {
                    AND (:enterprise IS NULL OR l.enterprise_id = :enterprise)
                    AND (:project IS NULL OR l.project_id = :project)
                    AND (:owner IS NULL OR l.owner_id = :owner)
+                   AND (:due IS NULL OR (
+                     l.lead_status NOT IN ('WON', 'LOST') AND l.next_followup_at IS NOT NULL
+                     AND (
+                       (:due = 'overdue' AND l.next_followup_at < NOW())
+                       OR (:due = 'today' AND l.next_followup_at >= NOW()
+                           AND l.next_followup_at < CURRENT_DATE + INTERVAL 1 DAY)
+                       OR (:due = 'upcoming' AND l.next_followup_at >= NOW()
+                           AND l.next_followup_at < CURRENT_DATE + INTERVAL 7 DAY)
+                     )
+                   ))
                 """, "l.id DESC", params("scopeOwner", ownerScope(actor),
                 "keyword", trimmed(keyword) == null ? null : contains(keyword), "status", trimmed(leadStatus),
-                "enterprise", enterpriseId, "project", projectId, "owner", ownerId), page, size);
+                "enterprise", enterpriseId, "project", projectId, "owner", ownerId, "due", due), page, size);
     }
 
     @GetMapping("/{id}")
@@ -160,14 +176,23 @@ public class LeadController {
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> addFollowup(@PathVariable long id, @Valid @RequestBody FollowupInput input,
                                            @AuthenticationPrincipal AccountPrincipal actor) {
-        lock(id, actor);
+        var lead = lock(id, actor);
+        if (input.contactId() != null) {
+            db.one("""
+                    SELECT id FROM crm_contact
+                    WHERE id = :contact AND enterprise_id = :enterprise FOR SHARE
+                    """, params("contact", input.contactId(), "enterprise", lead.get("enterprise_id")),
+                    "联系人不存在或不属于该企业");
+        }
         long followup = db.insert("""
-                INSERT INTO crm_followup (lead_id, followup_type, content, result, next_action, next_followup_at, created_by)
-                VALUES (:lead, :type, :content, :result, :action, :nextFollowup, :actor)
-                """, params("lead", id, "type", trimmed(input.followupType()), "content", trimmed(input.content()),
+                INSERT INTO crm_followup
+                  (lead_id, contact_id, followup_type, content, result, next_action, next_followup_at, created_by)
+                VALUES (:lead, :contact, :type, :content, :result, :action, :nextFollowup, :actor)
+                """, params("lead", id, "contact", input.contactId(),
+                "type", trimmed(input.followupType()), "content", trimmed(input.content()),
                 "result", trimmed(input.result()), "action", trimmed(input.nextAction()),
                 "nextFollowup", input.nextFollowupAt(), "actor", actor.id()));
-        if (input.nextFollowupAt() != null) {
+        if (input.nextFollowupAt() != null || input.clearNextFollowup()) {
             db.update("UPDATE crm_lead SET next_followup_at = :nextFollowup WHERE id = :id",
                     params("nextFollowup", input.nextFollowupAt(), "id", id));
         }
@@ -229,10 +254,12 @@ public class LeadController {
     ) {}
 
     record FollowupInput(
+            @Positive Long contactId,
             @Size(max = 30) String followupType,
             @NotBlank @Size(max = 15000) String content,
             @Size(max = 15000) String result,
             @Size(max = 15000) String nextAction,
-            LocalDateTime nextFollowupAt
+            LocalDateTime nextFollowupAt,
+            boolean clearNextFollowup
     ) {}
 }

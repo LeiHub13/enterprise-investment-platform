@@ -110,6 +110,27 @@ button:focus-visible { outline: 2px solid #6bc7b6; outline-offset: 3px; }
 .page-heading p { margin: 0; color: #4f6676; font-size: 14px; line-height: 1.6; }
 .page-actions { display: flex; gap: 9px; flex-shrink: 0; }
 .page-actions .el-button + .el-button { margin: 0; }
+.dashboard { display: grid; gap: 22px; }
+.dashboard-error { margin-bottom: 16px; }
+.dashboard-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.dashboard-card { display: flex; flex-direction: column; align-items: start; gap: 10px; min-height: 130px; padding: 18px; text-align: left; border: 1px solid #e1e8ed; border-radius: 10px; background: #fff; color: #334b59; cursor: pointer; }
+.dashboard-card:hover { border-color: #76aaa1; }
+.dashboard-card strong { font-size: 30px; color: #123a38; line-height: 1; }
+.dashboard-card small { color: #607683; }
+.dashboard-card-alert strong { color: #b34632; }
+.dashboard-reminders-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; }
+.dashboard-reminders-heading h2 { margin: 0; font-size: 17px; }
+.dashboard-reminders-heading p { margin: 7px 0 0; color: #607683; font-size: 13px; }
+.contact-error { margin-top: 12px; }
+.contact-record { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 12px; border: 1px solid #e1e8ed; border-radius: 7px; }
+.contact-record span, .contact-record small { color: #4f6676; font-size: 13px; }
+.contact-record small { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.muted { color: #607683; font-size: 13px; }
+.tag-editor { margin-top: 14px; }
+.tag-actions { display: flex; justify-content: end; gap: 8px; margin-top: 10px; }
+.tag-actions .el-button + .el-button { margin-left: 0; }
+.batch-detail { margin-top: 22px; }
 
 .list-card { overflow: hidden; border: 1px solid #e1e8ed; border-radius: 10px; background: #fff; }
 .filters { display: flex; flex-wrap: wrap; gap: 10px; padding: 17px; border-bottom: 1px solid #e6edf0; }
