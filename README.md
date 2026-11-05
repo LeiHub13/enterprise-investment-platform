@@ -65,10 +65,10 @@ erDiagram
    Set-Location .\frontend
    npm.cmd ci --registry https://registry.npmjs.org
    npm.cmd run build
-   npm.cmd run preview -- --host 127.0.0.1 --port 5173 --strictPort
+   npm.cmd run preview -- --port 5173 --strictPort
    ```
 
-   打开终端显示的本地地址，使用刚创建的管理员账号登录。Vite 会把 `/api` 请求转发到本地后端。
+   打开终端显示的地址，使用管理员账号登录。前端同时监听本机和局域网地址，局域网设备可使用 `http://本机局域网IP:5173/` 访问。Vite 会把 `/api` 请求转发到本地后端。
 
    Windows 上，当前项目目录名包含 `~`，Vite 的开发服务器会对页面返回 403。上述本地预览方式适用于当前目录。使用热更新开发时，把项目放到不含 `~` 的路径，再运行 `npm.cmd run dev`。
 
