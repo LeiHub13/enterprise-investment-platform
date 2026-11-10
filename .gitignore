@@ -6,4 +6,9 @@
 backend/target/
 frontend/node_modules/
 frontend/dist/
+agent/data/
+.venv/
+.uv-cache/
+__pycache__/
+*.pyc
 *.log
