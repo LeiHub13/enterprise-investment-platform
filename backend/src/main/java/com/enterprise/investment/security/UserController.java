@@ -5,7 +5,6 @@ import java.util.List;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -24,20 +23,22 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/users")
 class UserController {
     private final AccountDirectory accounts;
+    private final TokenService tokens;
 
-    UserController(AccountDirectory accounts) {
+    UserController(AccountDirectory accounts, TokenService tokens) {
         this.accounts = accounts;
+        this.tokens = tokens;
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'INVESTMENT_MANAGER')")
+    @PreAuthorize("@ss.hasPermission('user:view')")
     List<AccountDirectory.AccountSummary> list(@AuthenticationPrincipal AccountPrincipal actor) {
-        return accounts.list("ADMIN".equals(actor.role()));
+        return accounts.list(actor.hasRole("ADMIN"));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("@ss.hasPermission('user:manage')")
     AccountPrincipal create(@Valid @RequestBody NewAccount input,
                             @AuthenticationPrincipal AccountPrincipal actor) {
         if (!AccountDirectory.isNewPasswordValid(input.password())) {
@@ -48,26 +49,42 @@ class UserController {
 
     @PutMapping("/{id}/enabled")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("@ss.hasPermission('user:manage')")
     void setEnabled(@PathVariable long id, @Valid @RequestBody EnabledInput input,
                     @AuthenticationPrincipal AccountPrincipal actor) {
         accounts.setEnabled(actor, id, input.enabled());
+        if (!input.enabled()) {
+            tokens.revokeAll(id);
+        }
     }
 
     @PutMapping("/{id}/password")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("@ss.hasPermission('user:manage')")
     void resetPassword(@PathVariable long id, @Valid @RequestBody PasswordInput input,
                        @AuthenticationPrincipal AccountPrincipal actor) {
         if (!AccountDirectory.isNewPasswordValid(input.password())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码至少 12 个字符，且最多 72 个 UTF-8 字节");
         }
         accounts.resetPassword(actor, id, input.password());
+        tokens.revokeAll(id);
     }
 
-    record NewAccount(@NotBlank @Pattern(regexp = AccountDirectory.USERNAME_PATTERN) String username,
+    @PutMapping("/{id}/role")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("@ss.hasPermission('user:manage')")
+    void changeRole(@PathVariable long id, @Valid @RequestBody RoleInput input,
+                    @AuthenticationPrincipal AccountPrincipal actor) {
+        accounts.changeRole(actor, id, input.role());
+        tokens.revokeAll(id);
+    }
+
+    record NewAccount(@NotBlank @Size(max = 64) String username,
                       @NotBlank @Size(min = 12, max = 72) String password,
-                      @NotBlank @Pattern(regexp = AccountDirectory.ROLE_PATTERN) String role) {
+                      @NotBlank @Size(max = 64) String role) {
+    }
+
+    record RoleInput(@NotBlank @Size(max = 64) String role) {
     }
 
     record EnabledInput(@NotNull Boolean enabled) {
