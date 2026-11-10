@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Value } from './api'
 import type { Field, Option } from './sections'
+import RegionSelect from './RegionSelect.vue'
 
 const model = defineModel<Record<string, Value>>({ required: true })
 defineProps<{
@@ -15,6 +16,12 @@ function isRemote(field: Field) {
 }
 
 function update(field: Field, value: Value | undefined) {
+  if (field.kind === 'province' && model.value[field.key] !== value) {
+    model.value.cityCode = null
+    model.value.districtCode = null
+  } else if (field.kind === 'city' && model.value[field.key] !== value) {
+    model.value.districtCode = null
+  }
   model.value[field.key] = value ?? null
 }
 
@@ -36,8 +43,12 @@ function dateValue(value: Value) {
       :required="field.required"
       :class="{ wide: field.kind === 'text' }"
     >
+      <RegionSelect v-if="field.kind === 'province' || field.kind === 'city' || field.kind === 'district'"
+        :model-value="model[field.key]" :level="field.kind"
+        :parent="field.kind === 'city' ? model.provinceCode : field.kind === 'district' ? model.cityCode : null"
+        :placeholder="'请选择' + field.label" @update:model-value="value => update(field, value)" />
       <el-select
-        v-if="field.kind === 'select' || field.kind === 'user' || isRemote(field)"
+        v-else-if="field.kind === 'select' || field.kind === 'user' || isRemote(field)"
         :model-value="model[field.key]"
         :placeholder="isRemote(field) ? '输入名称搜索' : '请选择'"
         :filterable="isRemote(field) || field.kind === 'user'"
