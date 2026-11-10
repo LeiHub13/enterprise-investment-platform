@@ -1,0 +1,77 @@
+name: panyue-agent
+
+services:
+  mysql:
+    image: mysql:8.4
+    command: ["--default-time-zone=+00:00"]
+    environment:
+      TZ: UTC
+      MYSQL_DATABASE: panyue_agent
+      MYSQL_USER: panyue
+      MYSQL_PASSWORD: ${PANYUE_MYSQL_PASSWORD:?Set PANYUE_MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${PANYUE_MYSQL_ROOT_PASSWORD:?Set PANYUE_MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PANYUE_MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${PANYUE_REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    hostname: panyue-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: panyue
+      RABBITMQ_DEFAULT_PASS: ${PANYUE_RABBITMQ_PASSWORD:?Set PANYUE_RABBITMQ_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PANYUE_RABBITMQ_PORT:-15673}:5672"
+      - "127.0.0.1:${PANYUE_RABBITMQ_MANAGEMENT_PORT:-25672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  business-api:
+    build: ./backend/business-api
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/panyue_agent?characterEncoding=UTF-8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
+      MYSQL_USER: panyue
+      MYSQL_PASSWORD: ${PANYUE_MYSQL_PASSWORD:?Set PANYUE_MYSQL_PASSWORD in .env}
+      SERVER_ADDRESS: 0.0.0.0
+    ports:
+      - "127.0.0.1:${PANYUE_BUSINESS_PORT:-18080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  agent-api:
+    build: ./services/agent
+    ports:
+      - "127.0.0.1:${PANYUE_AGENT_PORT:-18081}:8000"
+
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
