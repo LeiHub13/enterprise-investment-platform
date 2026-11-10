@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ContractMapper">
+
+    <sql id="columns">
+        c.id, c.contract_no, c.name, c.customer_id, cu.name AS customer_name,
+        c.business_id, b.name AS business_name, c.project_id, p.project_name,
+        c.owner_user_id, u.username AS owner_username, c.amount, c.sign_date, c.start_date, c.end_date,
+        c.status, c.remark, c.created_at, c.updated_at
+    </sql>
+
+    <sql id="joins">
+        FROM crm_contract c
+        JOIN ent_enterprise cu ON cu.id = c.customer_id
+        LEFT JOIN crm_business b ON b.id = c.business_id
+        LEFT JOIN crm_project p ON p.id = c.project_id
+        LEFT JOIN sys_user u ON u.id = c.owner_user_id
+    </sql>
+
+    <sql id="filters">
+        <if test="scopeOwner != null">AND c.owner_user_id = #{scopeOwner}</if>
+        <if test="keyword != null">AND (c.name LIKE #{keyword} OR c.contract_no LIKE #{keyword}
+            OR cu.name LIKE #{keyword} OR b.name LIKE #{keyword})</if>
+        <if test="status != null">AND c.status = #{status}</if>
+        <if test="customer != null">AND c.customer_id = #{customer}</if>
+        <if test="business != null">AND c.business_id = #{business}</if>
+        <if test="owner != null">AND c.owner_user_id = #{owner}</if>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) <include refid="joins"/>
+        <where><include refid="filters"/></where>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        <where><include refid="filters"/></where>
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        WHERE c.id = #{id}
+        <if test="scopeOwner != null">AND c.owner_user_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="lockById" resultType="java.util.LinkedHashMap">
+        SELECT id, customer_id, business_id, project_id, owner_user_id, status
+        FROM crm_contract
+        WHERE id = #{id}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+        FOR UPDATE
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_contract (contract_no, name, customer_id, business_id, project_id, owner_user_id,
+                                  amount, sign_date, start_date, end_date, status, remark, created_by)
+        VALUES (#{contractNo}, #{name}, #{customer}, #{business}, #{project}, #{owner},
+                #{amount}, #{signDate}, #{startDate}, #{endDate}, #{status}, #{remark}, #{actor})
+    </insert>
+
+    <update id="update">
+        UPDATE crm_contract SET name = #{name}, customer_id = #{customer}, business_id = #{business},
+            project_id = #{project}, owner_user_id = #{owner}, amount = #{amount},
+            sign_date = #{signDate}, start_date = #{startDate}, end_date = #{endDate},
+            status = #{status}, remark = #{remark}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM crm_contract WHERE id = #{id}
+    </delete>
+
+    <select id="countByCustomer" resultType="long">
+        SELECT COUNT(*) FROM crm_contract
+        WHERE customer_id = #{customer}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="listByCustomer" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        WHERE c.customer_id = #{customer}
+        <if test="scopeOwner != null">AND c.owner_user_id = #{scopeOwner}</if>
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="sumAmountByCustomer" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(amount), 0) FROM crm_contract
+        WHERE customer_id = #{customer}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+    </select>
+</mapper>

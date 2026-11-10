@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.DataMapper">
+    <select id="findCompany" resultType="long">
+        SELECT id FROM ent_enterprise WHERE id = #{id}
+    </select>
+
+    <insert id="insertSourceCursor">
+        INSERT IGNORE INTO collector_source_cursor(identity_hash, enterprise_id) VALUES (#{identity}, #{enterpriseId})
+    </insert>
+
+    <select id="lockSourceCursor" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT current_record_id, current_version, current_fingerprint, source_updated_at
+        FROM collector_source_cursor WHERE identity_hash = #{identity} FOR UPDATE
+    </select>
+
+    <update id="updateSourceCursor">
+        UPDATE collector_source_cursor SET current_record_id = #{recordId}, current_version = #{version},
+            current_fingerprint = #{fingerprint}, source_updated_at = #{sourceUpdatedAt}
+        WHERE identity_hash = #{identity}
+    </update>
+
+    <update id="attachLegacyIdentity">
+        UPDATE collector_record SET identity_hash = #{identity}, record_version = 1, change_type = 'NEW'
+        WHERE id = #{id} AND identity_hash IS NULL
+    </update>
+
+    <insert id="insertVersion" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO collector_record
+            (source, external_id, record_type, enterprise_id, title, summary, raw_payload, content_hash, published_at,
+             validity_status, identity_hash, record_version, change_type)
+        VALUES (#{source}, #{externalId}, #{recordType}, #{enterpriseId}, #{title}, #{summary},
+                #{rawPayload}, #{contentHash}, #{publishedAt}, #{validityStatus}, #{identity}, #{version}, #{changeType})
+    </insert>
+
+    <update id="supersedeRecord">
+        UPDATE collector_record SET validity_status = 'SUPERSEDED' WHERE id = #{id} AND validity_status = 'VALID'
+    </update>
+
+    <select id="findSnapshotByHash" resultType="java.util.LinkedHashMap">
+        SELECT r.id, r.title, r.summary, r.raw_payload, r.published_at, r.identity_hash,
+               s.source_url, s.observed_at, s.strength, s.confidence, s.expires_at
+        FROM collector_record r
+        LEFT JOIN ent_company_signal s ON s.id = (SELECT MIN(x.id) FROM ent_company_signal x
+                                                    WHERE x.source_record_id = r.id AND x.enterprise_id = r.enterprise_id)
+        WHERE r.content_hash = #{contentHash}
+    </select>
+
+    <select id="findRecordById" resultType="java.util.LinkedHashMap">
+        SELECT id, source, record_type, enterprise_id, title, summary
+        FROM collector_record WHERE id = #{id}
+    </select>
+
+    <insert id="insertSignal">
+        INSERT INTO ent_company_signal
+            (enterprise_id, signal_type, title, detail, source_name, source_url, observed_at, strength,
+             source_record_id, confidence, expires_at)
+        VALUES (#{enterpriseId}, #{signalType}, #{title}, #{detail}, #{sourceName}, #{sourceUrl},
+                #{observedAt}, #{strength}, #{sourceRecordId}, #{confidence}, #{expiresAt})
+    </insert>
+
+    <insert id="insertOutbox">
+        INSERT INTO collector_event_outbox (source_record_id, event_type) VALUES (#{recordId}, #{eventType})
+    </insert>
+
+    <select id="lockExpiringRecords" resultType="long" flushCache="true">
+        SELECT r.id FROM collector_record r
+        WHERE r.validity_status = 'VALID' AND EXISTS (
+            SELECT 1 FROM ent_company_signal s WHERE s.source_record_id = r.id AND s.enterprise_id = r.enterprise_id
+              AND s.expires_at IS NOT NULL AND s.expires_at &lt; NOW())
+        ORDER BY r.id LIMIT #{limit} FOR UPDATE SKIP LOCKED
+    </select>
+
+    <update id="expireRecord">
+        UPDATE collector_record SET validity_status = 'EXPIRED' WHERE id = #{id} AND validity_status = 'VALID'
+    </update>
+
+    <select id="lockOutboxBatch" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT o.id, o.event_type, o.source_record_id, r.enterprise_id, r.source, r.record_type,
+               r.published_at, r.fetched_at, r.validity_status, r.record_version, r.change_type,
+               CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END AS is_demo
+        FROM collector_event_outbox o JOIN collector_record r ON r.id = o.source_record_id
+        WHERE ((o.status = 'PENDING' AND o.next_attempt_at &lt;= NOW())
+               OR (o.status = 'LEASED' AND o.lease_until &lt; NOW()))
+        ORDER BY o.id LIMIT #{limit} FOR UPDATE SKIP LOCKED
+    </select>
+
+    <update id="leaseOutbox">
+        UPDATE collector_event_outbox SET status = 'LEASED', lease_token = #{token},
+               lease_until = DATE_ADD(NOW(), INTERVAL 2 MINUTE), attempts = attempts + 1
+        WHERE id = #{id}
+    </update>
+
+    <update id="ackOutbox">
+        UPDATE collector_event_outbox SET status = 'PUBLISHED', published_at = NOW(), lease_token = NULL, lease_until = NULL
+        WHERE id = #{id} AND status = 'LEASED' AND lease_token = #{token} AND lease_until &gt;= NOW()
+    </update>
+
+    <update id="retryOutbox">
+        UPDATE collector_event_outbox SET status = 'PENDING', lease_token = NULL, lease_until = NULL,
+               next_attempt_at = DATE_ADD(NOW(), INTERVAL 30 SECOND)
+        WHERE id = #{id} AND status = 'LEASED' AND lease_token = #{token}
+    </update>
+
+    <select id="resolveCompany" resultType="java.util.LinkedHashMap">
+        SELECT id, name, uscc FROM ent_enterprise
+        WHERE (#{uscc} IS NOT NULL AND #{uscc} != '' AND uscc = #{uscc})
+           OR ((#{uscc} IS NULL OR #{uscc} = '') AND #{name} IS NOT NULL AND #{name} != '' AND name = #{name})
+        ORDER BY id
+        LIMIT 2
+    </select>
+
+    <select id="sourceStatus" resultType="java.util.LinkedHashMap">
+        SELECT source, record_type, COUNT(*) AS record_count, MAX(fetched_at) AS last_fetched_at,
+               SUM(CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END) AS demo_count,
+               SUM(CASE WHEN fetched_at >= NOW() - INTERVAL 1 DAY THEN 1 ELSE 0 END) AS fetched_24h
+        FROM collector_record
+        GROUP BY source, record_type
+        ORDER BY source, record_type
+    </select>
+
+    <select id="collectorSummary" resultType="java.util.LinkedHashMap">
+        SELECT
+            (SELECT COUNT(*) FROM collector_record) AS record_count,
+            (SELECT COUNT(*) FROM collector_record WHERE COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(raw_payload, '$.demo'))), 'false') NOT IN ('false', '0')) AS demo_record_count,
+            (SELECT COUNT(*) FROM ent_company_signal) AS signal_count,
+            (SELECT COUNT(*) FROM collector_record
+             WHERE fetched_at >= NOW() - INTERVAL 1 DAY) AS fetched_24h,
+            (SELECT MAX(fetched_at) FROM collector_record) AS last_fetched_at
+    </select>
+
+    <sql id="recordFilter">
+        <where>
+            <if test="source != null">AND r.source = #{source}</if>
+            <if test="type != null">AND r.record_type = #{type}</if>
+            <if test="keyword != null">
+                AND (r.title LIKE #{keyword} ESCAPE '!' OR r.summary LIKE #{keyword} ESCAPE '!'
+                     OR e.name LIKE #{keyword} ESCAPE '!')
+            </if>
+        </where>
+    </sql>
+
+    <select id="countRecords" resultType="long">
+        SELECT COUNT(*)
+        FROM collector_record r
+        JOIN ent_enterprise e ON e.id = r.enterprise_id
+        <include refid="recordFilter"/>
+    </select>
+
+    <select id="listRecords" resultType="java.util.LinkedHashMap">
+        SELECT r.id, r.source, r.record_type, r.enterprise_id, e.name AS enterprise_name,
+               r.title, r.summary, r.published_at, r.fetched_at, r.record_version, r.change_type,
+               CASE WHEN r.validity_status = 'VALID' AND EXISTS (
+                   SELECT 1 FROM ent_company_signal s WHERE s.source_record_id = r.id AND s.enterprise_id = r.enterprise_id
+                     AND s.expires_at IS NOT NULL AND s.expires_at &lt; NOW()) THEN 'EXPIRED'
+                   ELSE r.validity_status END AS validity_status,
+               CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END AS is_demo
+        FROM collector_record r
+        JOIN ent_enterprise e ON e.id = r.enterprise_id
+        <include refid="recordFilter"/>
+        ORDER BY r.fetched_at DESC, r.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <sql id="signalFilter">
+        <where>
+            <if test="keyword != null">
+                AND (s.title LIKE #{keyword} ESCAPE '!' OR s.detail LIKE #{keyword} ESCAPE '!'
+                     OR e.name LIKE #{keyword} ESCAPE '!')
+            </if>
+        </where>
+    </sql>
+
+    <select id="countSignals" resultType="long">
+        SELECT COUNT(*)
+        FROM ent_company_signal s
+        JOIN ent_enterprise e ON e.id = s.enterprise_id
+        <include refid="signalFilter"/>
+    </select>
+
+    <select id="listSignals" resultType="java.util.LinkedHashMap">
+        SELECT s.id, s.enterprise_id, e.name AS enterprise_name, s.signal_type, s.title, s.detail,
+               s.source_name, s.source_url, s.observed_at, s.expires_at, s.strength, s.confidence,
+               s.created_at, r.record_version, r.change_type,
+               CASE WHEN r.validity_status = 'VALID' AND s.expires_at IS NOT NULL AND s.expires_at &lt; NOW()
+                    THEN 'EXPIRED' ELSE r.validity_status END AS validity_status,
+               CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END AS is_demo
+        FROM ent_company_signal s
+        JOIN ent_enterprise e ON e.id = s.enterprise_id
+        LEFT JOIN collector_record r ON r.id = s.source_record_id AND r.enterprise_id = s.enterprise_id
+        <include refid="signalFilter"/>
+        ORDER BY s.observed_at DESC, s.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+</mapper>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.AgentMapper">
+    <insert id="upsertConversation">
+        INSERT INTO agent_conversation (id, user_id, title) VALUES (#{id}, #{userId}, #{title})
+        ON DUPLICATE KEY UPDATE title = IF(user_id = VALUES(user_id) AND updated_at &lt; NOW() - INTERVAL 1 DAY, VALUES(title), title)
+    </insert>
+
+    <select id="conversationOwner" resultType="long">
+        SELECT user_id FROM agent_conversation WHERE id = #{id}
+    </select>
+
+    <select id="conversationHistory" resultType="java.util.LinkedHashMap">
+        SELECT message, report FROM agent_run
+        WHERE conversation_id = #{id} AND user_id = #{userId} AND report IS NOT NULL
+        ORDER BY created_at DESC, id DESC LIMIT 4
+    </select>
+
+    <insert id="insertRun">
+        INSERT INTO agent_run (id, conversation_id, user_id, project_id, message, status)
+        VALUES (#{id}, #{conversationId}, #{userId}, #{projectId}, #{message}, 'RUNNING')
+    </insert>
+
+    <select id="findRun" resultType="java.util.LinkedHashMap">
+        SELECT id, conversation_id, user_id, project_id, message, status, report, lead_ids, created_at, finished_at
+        FROM agent_run WHERE id = #{id}
+    </select>
+
+    <select id="listRuns" resultType="java.util.LinkedHashMap">
+        SELECT id, conversation_id, project_id, message, status, lead_ids, created_at, finished_at
+        FROM agent_run WHERE user_id = #{userId}
+        <if test="status != null">AND status = #{status}</if>
+        ORDER BY created_at DESC, id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <update id="setReport">
+        UPDATE agent_run SET report = #{report} WHERE id = #{id}
+    </update>
+
+    <update id="setStatus">
+        UPDATE agent_run SET status = #{status} WHERE id = #{id}
+    </update>
+
+    <update id="markAwaitingReview">
+        UPDATE agent_run SET status = 'AWAITING_REVIEW' WHERE id = #{id} AND status = 'RUNNING'
+    </update>
+
+    <update id="claimReview">
+        UPDATE agent_run SET status = #{status} WHERE id = #{id} AND status = 'AWAITING_REVIEW'
+    </update>
+
+    <update id="finishRun">
+        UPDATE agent_run SET status = #{status}, finished_at = NOW() WHERE id = #{id}
+    </update>
+
+    <update id="appendLeadId">
+        UPDATE agent_run SET lead_ids = CONCAT_WS(',', lead_ids, #{leadId}) WHERE id = #{id}
+    </update>
+
+    <insert id="insertToolLog">
+        INSERT INTO agent_tool_log (run_id, node, tool, args_summary, result_summary, status, duration_ms)
+        VALUES (#{runId}, #{node}, #{tool}, #{argsSummary}, #{resultSummary}, #{status}, #{durationMs})
+    </insert>
+
+    <insert id="insertScore">
+        INSERT INTO crm_lead_score (run_id, enterprise_id, project_id, total_score, industry_score, region_score,
+                                    scale_score, signal_score, completeness_score, grade, source_type, reasons, duplicate_lead_id,
+                                    fit_score, intent_score, confidence_score, score_model_version)
+        VALUES (#{runId}, #{enterpriseId}, #{projectId}, #{totalScore}, #{industryScore}, #{regionScore},
+                #{scaleScore}, #{signalScore}, #{completenessScore}, #{grade}, #{sourceType}, #{reasons}, #{duplicateLeadId},
+                #{fitScore}, #{intentScore}, #{confidenceScore}, 'V2')
+    </insert>
+
+    <select id="listTools" resultType="java.util.LinkedHashMap">
+        SELECT id, run_id, node, tool, args_summary, result_summary, status, duration_ms, created_at
+        FROM agent_tool_log WHERE run_id = #{runId} ORDER BY id
+    </select>
+
+    <select id="listScores" resultType="java.util.LinkedHashMap">
+        SELECT s.id, s.run_id, s.enterprise_id, e.name AS enterprise_name, s.project_id, s.total_score,
+               s.industry_score, s.region_score, s.scale_score, s.signal_score, s.completeness_score,
+               s.fit_score, s.intent_score, s.confidence_score, s.score_model_version,
+               s.grade, s.source_type, s.reasons, s.duplicate_lead_id, s.created_at
+        FROM crm_lead_score s LEFT JOIN ent_enterprise e ON e.id = s.enterprise_id
+        WHERE s.run_id = #{runId} ORDER BY s.total_score DESC, s.id
+    </select>
+</mapper>

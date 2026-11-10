@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.EnterpriseVerificationMapper">
+    <select id="company" resultType="java.util.LinkedHashMap">
+        SELECT id, name, name_normalized, uscc, business_status FROM ent_enterprise WHERE id = #{id}
+    </select>
+    <select id="countByNormalizedName" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise WHERE name_normalized = #{name}
+    </select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ent_enterprise_verification(enterprise_id, source, order_ref, is_demo, result_status,
+            verified_name, verified_uscc, business_status, registered_address, reason)
+        VALUES (#{enterpriseId}, #{source}, #{orderRef}, #{demo}, #{status}, #{name}, #{uscc}, #{businessStatus}, #{address}, #{reason})
+        ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)
+    </insert>
+    <select id="lockById" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT id, enterprise_id, source, order_ref, is_demo, result_status, verified_name, verified_uscc,
+               business_status, registered_address, reason, verified_at
+        FROM ent_enterprise_verification WHERE id = #{id} FOR UPDATE
+    </select>
+    <select id="latestReal" resultType="java.util.LinkedHashMap" flushCache="true" useCache="false">
+        SELECT id, source, verified_at, verified_name, verified_uscc, business_status, registered_address,
+               CASE WHEN verified_at &gt;= NOW() - INTERVAL 30 DAY THEN reason ELSE '核验结果已超过30天有效期，需重新核实' END AS reason,
+               CASE WHEN verified_at &gt;= NOW() - INTERVAL 30 DAY THEN result_status ELSE 'PENDING' END AS verification_status,
+               CASE WHEN verified_at &gt;= NOW() - INTERVAL 30 DAY THEN 1 ELSE 0 END AS verification_fresh
+        FROM ent_enterprise_verification WHERE enterprise_id = #{enterpriseId} AND is_demo = FALSE
+        ORDER BY id DESC LIMIT 1
+    </select>
+    <select id="history" resultType="java.util.LinkedHashMap">
+        SELECT id, source, is_demo, result_status, verified_name, verified_uscc, business_status,
+               registered_address, reason, verified_at
+        FROM ent_enterprise_verification WHERE enterprise_id = #{enterpriseId}
+        ORDER BY id DESC LIMIT #{limit}
+    </select>
+</mapper>

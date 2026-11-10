@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ObservationMapper">
+    <sql id="fields">
+        o.id, o.run_id, o.enterprise_id, e.name AS enterprise_name, o.project_id, p.project_name,
+        o.signal_id, o.source_record_id, o.total_score, o.grade, o.reason, o.status, o.created_at
+    </sql>
+
+    <sql id="from">
+        FROM crm_lead_observation o
+        JOIN ent_enterprise e ON e.id = o.enterprise_id
+        LEFT JOIN crm_project p ON p.id = o.project_id
+    </sql>
+
+    <sql id="filter">
+        <where>
+            <if test="keyword != null">
+                AND (e.name LIKE #{keyword} ESCAPE '!' OR o.reason LIKE #{keyword} ESCAPE '!')
+            </if>
+            <if test="status != null">AND o.status = #{status}</if>
+            <if test="enterpriseId != null">AND o.enterprise_id = #{enterpriseId}</if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        <include refid="from"/>
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        <include refid="filter"/>
+        ORDER BY o.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        WHERE o.id = #{id}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_lead_observation
+            (run_id, enterprise_id, project_id, signal_id, source_record_id, total_score, grade, reason, status)
+        VALUES (#{runId}, #{enterpriseId}, #{projectId}, #{signalId}, #{sourceRecordId},
+                #{totalScore}, #{grade}, #{reason}, #{status})
+    </insert>
+</mapper>

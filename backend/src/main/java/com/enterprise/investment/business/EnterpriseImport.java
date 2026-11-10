@@ -1,5 +1,7 @@
 package com.enterprise.investment.business;
 
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.ImportMapper;
 import jakarta.validation.Validator;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -24,7 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import static com.enterprise.investment.business.BusinessData.params;
+import static com.enterprise.investment.business.Rows.params;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @Service
@@ -32,24 +34,30 @@ class EnterpriseImport {
     private static final int MAX_ROWS = 5_000;
     private static final Map<String, String> HEADERS = Map.ofEntries(
             Map.entry("企业名称", "name"), Map.entry("统一社会信用代码", "uscc"),
-            Map.entry("企业类型", "enterpriseType"), Map.entry("省份代码", "provinceCode"),
-            Map.entry("城市代码", "cityCode"), Map.entry("区县代码", "districtCode"),
+            Map.entry("企业类型", "enterpriseType"), Map.entry("省份", "provinceCode"),
+            Map.entry("省份名称", "provinceCode"), Map.entry("省份代码", "provinceCode"),
+            Map.entry("城市", "cityCode"), Map.entry("城市名称", "cityCode"), Map.entry("城市代码", "cityCode"),
+            Map.entry("区县", "districtCode"), Map.entry("区县名称", "districtCode"), Map.entry("区县代码", "districtCode"),
             Map.entry("行业代码", "industryCode"), Map.entry("行业名称", "industryName"),
             Map.entry("经营状态", "businessStatus"), Map.entry("注册资本", "registeredCapital"),
             Map.entry("成立日期", "establishedDate"), Map.entry("注册地址", "registeredAddress"),
             Map.entry("经营范围", "businessScope"), Map.entry("企业官网", "website"));
 
-    private final BusinessData db;
+    private final ImportMapper imports;
+    private final AuditMapper audits;
     private final EnterpriseService enterprises;
     private final TransactionTemplate transaction;
     private final Validator validator;
+    private final RegionCatalog regions;
 
-    EnterpriseImport(BusinessData db, EnterpriseService enterprises, TransactionTemplate transaction,
-                     Validator validator) {
-        this.db = db;
+    EnterpriseImport(ImportMapper imports, AuditMapper audits, EnterpriseService enterprises,
+                     TransactionTemplate transaction, Validator validator, RegionCatalog regions) {
+        this.imports = imports;
+        this.audits = audits;
         this.enterprises = enterprises;
         this.transaction = transaction;
         this.validator = validator;
+        this.regions = regions;
     }
 
     Result run(MultipartFile file, long actor) {
@@ -84,10 +92,9 @@ class EnterpriseImport {
             }
 
             long source = enterprises.sourceId("EXCEL");
-            long batch = db.insert("""
-                    INSERT INTO data_import_batch (source_id, file_name, total_count, status, created_by)
-                    VALUES (:source, :filename, :total, 'PROCESSING', :actor)
-                    """, params("source", source, "filename", basename, "total", rows.size(), "actor", actor));
+            var batchValues = params("source", source, "filename", basename, "total", rows.size(), "actor", actor);
+            imports.insertBatch(batchValues);
+            long batch = ((Number) batchValues.get("id")).longValue();
             var errors = new ArrayList<RowError>();
             try {
                 for (Row row : rows) {
@@ -100,7 +107,7 @@ class EnterpriseImport {
                 }
                 transaction.executeWithoutResult(status -> {
                     finish(batch, errors.isEmpty() ? "COMPLETED" : "COMPLETED_WITH_ERRORS");
-                    db.audit(actor, "IMPORT", "IMPORT_BATCH", batch);
+                    audits.record(actor, "IMPORT", "IMPORT_BATCH", batch);
                 });
             } catch (RuntimeException failure) {
                 finish(batch, "FAILED");
@@ -127,8 +134,7 @@ class EnterpriseImport {
             var input = input(row, columns, raw);
             transaction.executeWithoutResult(status -> {
                 enterprises.importRow(input, source, batch, rowNumber, raw, actor);
-                db.update("UPDATE data_import_batch SET success_count = success_count + 1 WHERE id = :batch",
-                        params("batch", batch));
+                imports.incrementSuccess(batch);
             });
             return null;
         } catch (ResponseStatusException e) {
@@ -138,15 +144,13 @@ class EnterpriseImport {
         }
         transaction.executeWithoutResult(status -> {
             enterprises.recordSource(source, null, batch, Integer.toString(rowNumber), raw, failure);
-            db.update("UPDATE data_import_batch SET fail_count = fail_count + 1 WHERE id = :batch",
-                    params("batch", batch));
+            imports.incrementFail(batch);
         });
         return failure;
     }
 
     private void finish(long batch, String status) {
-        db.update("UPDATE data_import_batch SET status = :status, finished_at = :finished WHERE id = :batch",
-                params("batch", batch, "status", status, "finished", LocalDateTime.now()));
+        imports.finish(batch, status, LocalDateTime.now());
     }
 
     private static Map<String, Integer> columns(Row header, DataFormatter formatter) {
@@ -183,8 +187,11 @@ class EnterpriseImport {
         if (usccCell != null && usccCell.getCellType() == CellType.NUMERIC) {
             throw new ResponseStatusException(BAD_REQUEST, "统一社会信用代码须以文本格式填写");
         }
+        String province = regions.nameOrLegacyCode(values.get("provinceCode"), "province", null);
+        String city = regions.nameOrLegacyCode(values.get("cityCode"), "city", province);
+        String district = regions.code(values.get("districtCode"), "district", city);
         var input = new EnterpriseInput(values.get("uscc"), values.get("name"), values.get("enterpriseType"),
-                values.get("provinceCode"), values.get("cityCode"), values.get("districtCode"),
+                province, city, district,
                 values.get("industryCode"), values.get("industryName"),
                 capital(cell(row, columns, "registeredCapital"), values.get("registeredCapital")),
                 date(cell(row, columns, "establishedDate"), values.get("establishedDate")),
@@ -194,8 +201,13 @@ class EnterpriseImport {
         if (!issues.isEmpty()) {
             String message = issues.stream().map(issue -> {
                 String field = issue.getPropertyPath().toString();
-                String label = HEADERS.entrySet().stream().filter(entry -> entry.getValue().equals(field))
-                        .map(Map.Entry::getKey).findFirst().orElse(field);
+                String label = switch (field) {
+                    case "provinceCode" -> "省份";
+                    case "cityCode" -> "城市";
+                    case "districtCode" -> "区县";
+                    default -> HEADERS.entrySet().stream().filter(entry -> entry.getValue().equals(field))
+                            .map(Map.Entry::getKey).findFirst().orElse(field);
+                };
                 return label + " " + issue.getMessage();
             }).sorted().collect(java.util.stream.Collectors.joining("，"));
             throw new ResponseStatusException(BAD_REQUEST, message);

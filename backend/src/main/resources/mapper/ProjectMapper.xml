@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ProjectMapper">
+
+    <sql id="fields">
+        p.id, p.project_name, p.province_code, p.city_code, p.industry_code, p.investment_min,
+        p.investment_max, p.requirements, p.project_status, p.owner_id, u.username AS owner_username,
+        p.address, p.area_min, p.area_max, p.rent_price, p.facilities,
+        p.district_code, p.building_type, p.target_area_min, p.target_area_max,
+        p.created_at, p.updated_at
+    </sql>
+
+    <sql id="from">
+        FROM crm_project p LEFT JOIN sys_user u ON p.owner_id = u.id
+    </sql>
+
+    <sql id="filter">
+        <where>
+            <if test="keyword != null">AND p.project_name LIKE #{keyword} ESCAPE '!'</if>
+            <if test="status != null">AND p.project_status = #{status}</if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        <include refid="from"/>
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        <include refid="filter"/>
+        ORDER BY p.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        WHERE p.id = #{id}
+    </select>
+
+    <select id="lock" resultType="long">
+        SELECT id FROM crm_project WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_project
+          (project_name, province_code, city_code, industry_code, investment_min, investment_max,
+           requirements, project_status, owner_id, created_by)
+        VALUES
+          (#{projectName}, #{province}, #{city}, #{industry}, #{min}, #{max}, #{requirements},
+           #{status}, #{owner}, #{actor})
+    </insert>
+
+    <update id="update">
+        UPDATE crm_project SET project_name = #{projectName}, province_code = #{province},
+          city_code = #{city}, industry_code = #{industry}, investment_min = #{min},
+          investment_max = #{max}, requirements = #{requirements}, project_status = #{status},
+          owner_id = #{owner}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM crm_project WHERE id = #{id}
+    </delete>
+</mapper>

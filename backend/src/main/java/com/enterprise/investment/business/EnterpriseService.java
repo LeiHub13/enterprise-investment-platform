@@ -1,5 +1,10 @@
 package com.enterprise.investment.business;
 
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.EnterpriseMapper;
+import com.enterprise.investment.mapper.EnterpriseVerificationMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,43 +19,62 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
-import static com.enterprise.investment.business.BusinessData.*;
+import static com.enterprise.investment.business.Rows.contains;
+import static com.enterprise.investment.business.Rows.jdbcValue;
+import static com.enterprise.investment.business.Rows.params;
+import static com.enterprise.investment.business.Rows.trimmed;
+import static com.enterprise.investment.business.Rows.view;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
 class EnterpriseService {
     private static final String ENTITY = "ENTERPRISE";
-    private static final String FIELDS = """
-            id, uscc, name, name_normalized, enterprise_type, province_code, city_code, district_code,
-            industry_code, industry_name, registered_capital, established_date, business_status,
-            registered_address, business_scope, website, source_id, last_verified_at, created_at, updated_at
-            """;
-    private final BusinessData db;
+    private final EnterpriseMapper enterprises;
+    private final AuditMapper audits;
+    private final ObjectMapper objectMapper;
+    private final RegionCatalog regions;
+    private final EnterpriseVerificationMapper verifications;
 
-    EnterpriseService(BusinessData db) {
-        this.db = db;
+    EnterpriseService(EnterpriseMapper enterprises, AuditMapper audits, ObjectMapper objectMapper,
+                      RegionCatalog regions, EnterpriseVerificationMapper verifications) {
+        this.enterprises = enterprises;
+        this.audits = audits;
+        this.objectMapper = objectMapper;
+        this.regions = regions;
+        this.verifications = verifications;
     }
 
-    BusinessData.Page list(String keyword, String provinceCode, String cityCode,
-                           String industryCode, String businessStatus, int page, int size) {
-        var args = params("keyword", trimmed(keyword) == null ? null : contains(normalizeName(keyword)),
-                "province", trimmed(provinceCode), "city", trimmed(cityCode),
-                "industry", trimmed(industryCode), "status", trimmed(businessStatus));
-        return db.page(FIELDS, "FROM ent_enterprise", """
-                 WHERE (:keyword IS NULL OR name_normalized LIKE :keyword ESCAPE '!'
-                         OR CONVERT(uscc USING utf8mb4) LIKE :keyword ESCAPE '!')
-                   AND (:province IS NULL OR province_code = :province)
-                   AND (:city IS NULL OR city_code = :city)
-                   AND (:industry IS NULL OR industry_code = :industry)
-                   AND (:status IS NULL OR business_status = :status)
-                """, "id DESC", args, page, size);
+    PageResult list(String keyword, String provinceCode, String cityCode,
+                    String industryCode, String businessStatus, int page, int size) {
+        long offset = Paging.offset(page, size);
+        String normalized = trimmed(keyword) == null ? null : contains(normalizeName(keyword));
+        var province = regions.variants(provinceCode, "province", null);
+        var city = regions.variants(cityCode, "city", provinceCode);
+        String industry = trimmed(industryCode);
+        String status = trimmed(businessStatus);
+        long total = enterprises.count(normalized, province, city, industry, status);
+        var items = enterprises.list(normalized, province, city, industry, status, size, offset)
+                .stream().map(Rows::view).toList();
+        return new PageResult(items, total);
     }
 
     Map<String, Object> get(long id) {
-        return view(find(id, false));
+        Map<String, Object> company = view(find(id, false));
+        Map<String, Object> verification = verifications.latestReal(id);
+        if (verification == null) {
+            company.put("verificationStatus", "PENDING");
+        } else {
+            Map<String, Object> latest = view(verification);
+            company.put("verificationStatus", latest.get("verificationStatus"));
+            company.put("verificationSource", latest.get("source"));
+            company.put("verificationAt", latest.get("verifiedAt"));
+            company.put("verificationReason", latest.get("reason"));
+            company.put("verificationFresh", latest.get("verificationFresh"));
+        }
+        return company;
     }
 
     @Transactional
@@ -58,7 +82,7 @@ class EnterpriseService {
         long source = sourceId("MANUAL");
         long id = insert(values(input), source);
         recordSource(source, id, null, null, input, null);
-        db.audit(actor, "CREATE", ENTITY, id);
+        audits.record(actor, "CREATE", ENTITY, id);
         return get(id);
     }
 
@@ -66,12 +90,10 @@ class EnterpriseService {
     public Map<String, Object> replace(long id, EnterpriseInput input, long actor) {
         var old = find(id, true);
         var changes = values(input);
-        var assignment = changes.keySet().stream().map(field -> field + " = :" + field)
-                .collect(Collectors.joining(", "));
         var updateArgs = params("id", id);
         updateArgs.putAll(changes);
         try {
-            db.update("UPDATE ent_enterprise SET " + assignment + " WHERE id = :id", updateArgs);
+            enterprises.update(updateArgs);
         } catch (DuplicateKeyException e) {
             throw duplicate(e);
         }
@@ -82,15 +104,11 @@ class EnterpriseService {
         if (!changedFields.isEmpty()) {
             long sourceRecord = recordSource(sourceId("MANUAL"), id, null, null, input, null);
             for (String field : changedFields) {
-                db.update("""
-                        INSERT INTO ent_enterprise_change
-                          (enterprise_id, source_record_id, field_name, old_value, new_value, changed_by)
-                        VALUES (:enterprise, :sourceRecord, :field, :oldValue, :newValue, :actor)
-                        """, params("enterprise", id, "sourceRecord", sourceRecord, "field", field,
-                        "oldValue", Objects.toString(jdbcValue(old.get(field)), null),
-                        "newValue", Objects.toString(jdbcValue(updated.get(field)), null), "actor", actor));
+                enterprises.insertChange(id, sourceRecord, field,
+                        Objects.toString(jdbcValue(old.get(field)), null),
+                        Objects.toString(jdbcValue(updated.get(field)), null), actor);
             }
-            db.audit(actor, "UPDATE", ENTITY, id);
+            audits.record(actor, "UPDATE", ENTITY, id);
         }
         return view(updated);
     }
@@ -98,21 +116,25 @@ class EnterpriseService {
     @Transactional
     public void delete(long id, long actor) {
         find(id, true);
-        db.update("DELETE FROM ent_enterprise WHERE id = :id", params("id", id));
-        db.audit(actor, "DELETE", ENTITY, id);
+        enterprises.delete(id);
+        audits.record(actor, "DELETE", ENTITY, id);
     }
 
     long importRow(EnterpriseInput input, long source, long batch, int row, Object raw, long actor) {
         var fields = values(input);
+        fields.put("province_variants", regions.variants(input.provinceCode(), "province", null));
+        fields.put("city_variants", regions.variants(input.cityCode(), "city", input.provinceCode()));
+        fields.put("district_variants", regions.variants(input.districtCode(), "district", input.cityCode()));
         // Serialize the candidate check across Excel uploads, including records with no credit code.
-        db.one("SELECT id FROM data_source WHERE id = :id AND enabled = TRUE FOR UPDATE",
-                params("id", source), "未配置数据来源");
-        if (hasCandidate(fields)) {
+        if (enterprises.lockDataSource(source) == null) {
+            throw new ResponseStatusException(NOT_FOUND, "未配置数据来源");
+        }
+        if (enterprises.countCandidates(fields) > 0) {
             throw new ResponseStatusException(CONFLICT, "存在同名候选企业，请核对统一社会信用代码");
         }
         long id = insert(fields, source);
         recordSource(source, id, batch, Integer.toString(row), raw, null);
-        db.audit(actor, "IMPORT", ENTITY, id);
+        audits.record(actor, "IMPORT", ENTITY, id);
         return id;
     }
 
@@ -122,53 +144,36 @@ class EnterpriseService {
             case "EXCEL" -> "Excel 批量导入";
             default -> throw new IllegalArgumentException("Unsupported source type: " + type);
         };
-        return ((Number) db.one("""
-                SELECT id FROM data_source WHERE source_type = :type AND source_name = :name AND enabled = TRUE
-                """,
-                params("type", type, "name", name), "未配置数据来源").get("id")).longValue();
+        Long id = enterprises.findDataSource(type, name);
+        if (id == null) {
+            throw new ResponseStatusException(NOT_FOUND, "未配置数据来源");
+        }
+        return id;
     }
 
     long recordSource(long source, Long enterprise, Long batch, String row, Object raw, String error) {
-        String payload = db.json(raw);
-        return db.insert("""
-                INSERT INTO data_source_record
-                  (source_id, enterprise_id, import_batch_id, external_id, entity_key, raw_payload,
-                   checksum, parse_status, parse_error, fetched_at)
-                VALUES
-                  (:source, :enterprise, :batch, :row, :entityKey, :payload,
-                   :checksum, :status, :error, :fetchedAt)
-                """, params("source", source, "enterprise", enterprise, "batch", batch, "row", row,
+        String payload = json(raw);
+        var record = params("source", source, "enterprise", enterprise, "batch", batch, "row", row,
                 "entityKey", enterprise == null ? null : Long.toString(enterprise), "payload", payload,
                 "checksum", checksum(payload), "status", error == null ? "PARSED" : "FAILED",
-                "error", error, "fetchedAt", LocalDateTime.now()));
+                "error", error, "fetchedAt", LocalDateTime.now());
+        enterprises.insertSourceRecord(record);
+        return ((Number) record.get("id")).longValue();
     }
 
     private Map<String, Object> find(long id, boolean lock) {
-        return db.one("SELECT " + FIELDS + " FROM ent_enterprise WHERE id = :id" + (lock ? " FOR UPDATE" : ""),
-                params("id", id), "企业不存在");
+        var row = lock ? enterprises.findByIdForUpdate(id) : enterprises.findById(id);
+        return Rows.required(row, "企业不存在");
     }
 
     private long insert(Map<String, Object> values, long source) {
         values.put("source_id", source);
-        String columns = String.join(", ", values.keySet());
-        String placeholders = values.keySet().stream().map(field -> ":" + field).collect(Collectors.joining(", "));
         try {
-            return db.insert("INSERT INTO ent_enterprise (" + columns + ") VALUES (" + placeholders + ")", values);
+            enterprises.insert(values);
         } catch (DuplicateKeyException e) {
             throw duplicate(e);
         }
-    }
-
-    private boolean hasCandidate(Map<String, Object> fields) {
-        return !db.query("""
-                SELECT id FROM ent_enterprise
-                WHERE name_normalized = :name_normalized
-                  AND (:uscc IS NULL OR uscc IS NULL)
-                  AND (:province_code IS NULL OR province_code IS NULL OR province_code = :province_code)
-                  AND (:city_code IS NULL OR city_code IS NULL OR city_code = :city_code)
-                  AND (:district_code IS NULL OR district_code IS NULL OR district_code = :district_code)
-                LIMIT 1
-                """, fields).isEmpty();
+        return ((Number) values.get("id")).longValue();
     }
 
     private static Map<String, Object> values(EnterpriseInput input) {
@@ -200,6 +205,14 @@ class EnterpriseService {
 
     private static String normalizeName(String name) {
         return Normalizer.normalize(name, Normalizer.Form.NFKC).replaceAll("(?U)\\s+", " ").strip();
+    }
+
+    private String json(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("无法保存数据来源记录", e);
+        }
     }
 
     private static String checksum(String text) {

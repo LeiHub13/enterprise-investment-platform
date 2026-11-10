@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ImportMapper">
+
+    <insert id="insertBatch" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO data_import_batch (source_id, file_name, total_count, status, created_by)
+        VALUES (#{source}, #{filename}, #{total}, 'PROCESSING', #{actor})
+    </insert>
+
+    <update id="incrementSuccess">
+        UPDATE data_import_batch SET success_count = success_count + 1 WHERE id = #{batch}
+    </update>
+
+    <update id="incrementFail">
+        UPDATE data_import_batch SET fail_count = fail_count + 1 WHERE id = #{batch}
+    </update>
+
+    <update id="finish">
+        UPDATE data_import_batch
+        SET status = #{status}, finished_at = #{finished}
+        WHERE id = #{batch}
+    </update>
+</mapper>

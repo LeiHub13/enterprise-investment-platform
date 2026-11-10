@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.AgentLeadMapper">
+    <select id="lockRun" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT id, user_id, status FROM agent_run WHERE id = #{runId} FOR UPDATE
+    </select>
+    <select id="findScore" resultType="java.util.LinkedHashMap">
+        SELECT total_score, grade FROM crm_lead_score
+        WHERE run_id = #{runId} AND enterprise_id = #{enterpriseId} AND project_id = #{projectId}
+          AND score_model_version = 'V2' ORDER BY id DESC LIMIT 1
+    </select>
+    <select id="findCreatedLead" resultType="long">
+        SELECT lead_id FROM agent_lead_creation
+        WHERE run_id = #{runId} AND enterprise_id = #{enterpriseId} AND project_id = #{projectId}
+    </select>
+    <insert id="reserve">
+        INSERT IGNORE INTO agent_lead_creation (run_id, enterprise_id, project_id)
+        VALUES (#{runId}, #{enterpriseId}, #{projectId})
+    </insert>
+    <update id="attachLead">
+        UPDATE agent_lead_creation SET lead_id = #{leadId}
+        WHERE run_id = #{runId} AND enterprise_id = #{enterpriseId} AND project_id = #{projectId}
+    </update>
+    <insert id="insertEvidence">
+        INSERT INTO crm_lead_evidence (lead_id, signal_id, source_record_id, evidence_type, title, summary, source_url, confidence)
+        SELECT #{leadId}, s.id, r.id, s.signal_type, s.title, s.detail, s.source_url, s.confidence
+        FROM ent_company_signal s JOIN collector_record r ON r.id = s.source_record_id AND r.enterprise_id = s.enterprise_id
+        WHERE s.enterprise_id = #{enterpriseId} AND s.signal_type IN ('RECRUITMENT', 'RENTAL')
+          AND r.record_type = s.signal_type AND r.validity_status = 'VALID'
+          AND COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') IN ('false', '0')
+          AND COALESCE(r.published_at, s.observed_at) &gt;= CURRENT_DATE - INTERVAL 30 DAY
+          AND COALESCE(r.published_at, s.observed_at) &lt;= NOW()
+          AND (s.expires_at IS NULL OR s.expires_at &gt;= NOW())
+          AND s.id IN
+          <foreach collection="signalIds" item="signalId" open="(" separator="," close=")">#{signalId}</foreach>
+    </insert>
+    <select id="listEvidence" resultType="java.util.LinkedHashMap">
+        SELECT e.id, e.signal_id, e.source_record_id, e.evidence_type, e.title, e.summary, e.source_url,
+               e.confidence, e.created_at, r.source, r.published_at, r.fetched_at, r.validity_status
+        FROM crm_lead_evidence e LEFT JOIN collector_record r ON r.id = e.source_record_id
+        WHERE e.lead_id = #{leadId} ORDER BY e.id
+    </select>
+    <select id="findLeadAnalysis" resultType="java.util.LinkedHashMap">
+        SELECT s.run_id, s.total_score, s.fit_score, s.intent_score, s.confidence_score, s.grade, s.reasons,
+               e.name AS enterprise_name, e.uscc, e.business_status, e.registered_address, e.industry_name
+        FROM agent_lead_creation c
+        JOIN crm_lead_score s ON s.run_id = c.run_id AND s.enterprise_id = c.enterprise_id AND s.project_id = c.project_id
+        JOIN ent_enterprise e ON e.id = c.enterprise_id
+        WHERE c.lead_id = #{leadId} AND s.score_model_version = 'V2'
+        ORDER BY s.id DESC LIMIT 1
+    </select>
+</mapper>

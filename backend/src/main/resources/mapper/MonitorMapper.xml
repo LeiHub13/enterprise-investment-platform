@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.MonitorMapper">
+    <sql id="fields">
+        t.id, t.enterprise_id, e.name AS enterprise_name, t.source, t.mode, t.interval_minutes, t.max_pages,
+        t.enabled, t.next_run_at, t.last_status, t.last_finished_at, t.consecutive_failures,
+        t.created_at, t.updated_at, c.last_success_at, c.last_pages_fetched, c.possibly_truncated,
+        CASE WHEN t.lease_token IS NOT NULL AND t.lease_until &gt;= NOW() THEN 1 ELSE 0 END AS running,
+        (SELECT r.error_code FROM collector_monitor_run r WHERE r.task_id = t.id ORDER BY r.id DESC LIMIT 1) AS last_error_code
+    </sql>
+    <sql id="fromTasks">
+        FROM collector_monitor_task t JOIN ent_enterprise e ON e.id = t.enterprise_id
+        LEFT JOIN collector_monitor_cursor c ON c.task_id = t.id
+    </sql>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM collector_monitor_task</select>
+    <select id="summary" resultType="java.util.LinkedHashMap">
+        SELECT COUNT(*) AS total,
+               COALESCE(SUM(CASE WHEN enabled = TRUE THEN 1 ELSE 0 END), 0) AS enabled,
+               COALESCE(SUM(CASE WHEN last_status = 'FAILED' THEN 1 ELSE 0 END), 0) AS failed,
+               COALESCE(SUM(CASE WHEN lease_token IS NOT NULL AND lease_until &gt;= NOW() THEN 1 ELSE 0 END), 0) AS running
+        FROM collector_monitor_task
+    </select>
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> <include refid="fromTasks"/>
+        ORDER BY t.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="find" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> <include refid="fromTasks"/> WHERE t.id = #{id}
+    </select>
+    <select id="lock" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT id, lease_token, lease_until FROM collector_monitor_task WHERE id = #{id} FOR UPDATE
+    </select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO collector_monitor_task(enterprise_id, source, mode, interval_minutes, max_pages, enabled, created_by, updated_by)
+        VALUES (#{enterprise}, 'QCC', #{mode}, #{intervalMinutes}, #{maxPages}, FALSE, #{actor}, #{actor})
+    </insert>
+    <update id="updateSettings">
+        UPDATE collector_monitor_task SET
+            next_run_at = CASE WHEN enabled = FALSE AND #{enabled} = TRUE THEN NOW() ELSE next_run_at END,
+            consecutive_failures = CASE WHEN enabled = FALSE AND #{enabled} = TRUE THEN 0 ELSE consecutive_failures END,
+            interval_minutes = #{intervalMinutes}, max_pages = #{maxPages}, enabled = #{enabled}, updated_by = #{actor}
+        WHERE id = #{id}
+    </update>
+    <select id="runs" resultType="java.util.LinkedHashMap">
+        SELECT id, task_id, status, error_code, created_records, updated_records, pages_fetched,
+               possibly_truncated, started_at, finished_at
+        FROM collector_monitor_run WHERE task_id = #{id} ORDER BY id DESC LIMIT #{limit}
+    </select>
+    <select id="lockDue" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT t.id, t.enterprise_id, e.name AS enterprise_name, e.uscc, t.mode, t.max_pages, t.lease_token
+        FROM collector_monitor_task t JOIN ent_enterprise e ON e.id = t.enterprise_id
+        WHERE t.enabled = TRUE AND t.next_run_at &lt;= NOW() AND (t.lease_until IS NULL OR t.lease_until &lt; NOW())
+        ORDER BY t.next_run_at, t.id LIMIT #{limit} FOR UPDATE SKIP LOCKED
+    </select>
+    <update id="markAbandoned">
+        UPDATE collector_monitor_run SET status = 'ABANDONED', finished_at = NOW()
+        WHERE lease_token = #{token} AND status = 'RUNNING'
+    </update>
+    <update id="lease">
+        UPDATE collector_monitor_task SET lease_token = #{token}, lease_until = DATE_ADD(NOW(), INTERVAL 30 MINUTE)
+        WHERE id = #{id}
+    </update>
+    <insert id="insertRun">
+        INSERT INTO collector_monitor_run(task_id, lease_token, status) VALUES (#{id}, #{token}, 'RUNNING')
+    </insert>
+    <update id="completeTask">
+        UPDATE collector_monitor_task SET
+            enabled = CASE WHEN #{status} = 'FAILED' AND consecutive_failures + 1 &gt;= 3 THEN FALSE ELSE enabled END,
+            consecutive_failures = CASE WHEN #{status} = 'FAILED' THEN consecutive_failures + 1 ELSE 0 END,
+            next_run_at = DATE_ADD(NOW(), INTERVAL (CASE WHEN #{status} = 'FAILED' THEN 60 ELSE interval_minutes END) MINUTE),
+            last_status = #{status}, last_finished_at = NOW(), lease_token = NULL, lease_until = NULL
+        WHERE id = #{id} AND lease_token = #{token} AND lease_until &gt;= NOW()
+    </update>
+    <update id="completeRun">
+        UPDATE collector_monitor_run SET status = #{status}, error_code = #{errorCode}, created_records = #{created},
+            updated_records = #{updated}, pages_fetched = #{pages}, possibly_truncated = #{truncated}, finished_at = NOW()
+        WHERE lease_token = #{token} AND status = 'RUNNING'
+    </update>
+    <insert id="updateCursor">
+        INSERT INTO collector_monitor_cursor(task_id, last_success_at, last_pages_fetched, possibly_truncated)
+        VALUES (#{id}, NOW(), #{pages}, #{truncated})
+        ON DUPLICATE KEY UPDATE last_success_at = VALUES(last_success_at),
+            last_pages_fetched = VALUES(last_pages_fetched), possibly_truncated = VALUES(possibly_truncated)
+    </insert>
+</mapper>

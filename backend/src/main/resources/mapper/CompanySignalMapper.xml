@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.CompanySignalMapper">
+    <select id="listByEnterprise" resultType="java.util.LinkedHashMap">
+        SELECT s.id, s.enterprise_id, s.signal_type, s.title, s.detail, s.source_name, s.source_url,
+               s.observed_at, s.expires_at, s.strength, s.confidence, s.source_record_id, s.created_at,
+               r.published_at, r.fetched_at,
+               CASE WHEN r.validity_status = 'VALID' AND s.expires_at IS NOT NULL AND s.expires_at &lt; NOW()
+                    THEN 'EXPIRED' ELSE r.validity_status END AS validity_status, r.raw_payload,
+               CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END AS is_demo
+        FROM ent_company_signal s
+        LEFT JOIN collector_record r ON r.id = s.source_record_id AND r.enterprise_id = s.enterprise_id
+        WHERE s.enterprise_id = #{enterpriseId}
+        ORDER BY s.observed_at DESC, s.id DESC
+    </select>
+
+    <insert id="insert">
+        INSERT INTO ent_company_signal (enterprise_id, signal_type, title, detail, source_name, source_url, observed_at, strength)
+        VALUES (#{enterpriseId}, #{signalType}, #{title}, #{detail}, #{sourceName}, #{sourceUrl}, #{observedAt}, #{strength})
+    </insert>
+</mapper>

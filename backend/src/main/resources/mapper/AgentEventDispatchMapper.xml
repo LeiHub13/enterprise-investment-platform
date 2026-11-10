@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.AgentEventDispatchMapper">
+    <select id="lockEvent" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT o.id, o.event_type, o.source_record_id, r.enterprise_id, r.source, r.record_type, r.title,
+               CASE WHEN COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.demo'))), 'false') NOT IN ('false', '0') THEN 1 ELSE 0 END AS is_demo,
+               CASE WHEN r.validity_status = 'VALID' AND EXISTS (
+                   SELECT 1 FROM ent_company_signal s WHERE s.source_record_id = r.id AND s.enterprise_id = r.enterprise_id
+                     AND s.expires_at IS NOT NULL AND s.expires_at &lt; NOW()) THEN 'EXPIRED'
+                   ELSE r.validity_status END AS validity_status
+        FROM collector_event_outbox o JOIN collector_record r ON r.id = o.source_record_id
+        WHERE o.id = #{id} FOR UPDATE
+    </select>
+
+    <select id="findDispatch" resultType="java.util.LinkedHashMap" flushCache="true">
+        SELECT run_id, owner_id, disposition, reason FROM agent_event_dispatch WHERE outbox_event_id = #{id}
+    </select>
+
+    <insert id="insert">
+        INSERT INTO agent_event_dispatch(outbox_event_id, run_id, owner_id, disposition, reason)
+        VALUES (#{eventId}, #{runId}, #{ownerId}, #{disposition}, #{reason})
+    </insert>
+
+    <update id="expireAbandonedRun">
+        UPDATE agent_run SET status = 'ERROR', finished_at = NOW()
+        WHERE id = #{runId} AND status = 'RUNNING' AND created_at &lt; NOW() - INTERVAL 15 MINUTE
+    </update>
+</mapper>

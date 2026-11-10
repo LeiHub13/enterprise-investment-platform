@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.LeadMapper">
+
+    <sql id="fields">
+        l.id, l.enterprise_id, e.name AS enterprise_name, l.project_id, p.project_name, l.source_channel,
+        l.lead_status, l.lead_score, l.owner_id, u.username AS owner_username, l.next_followup_at,
+        l.source_type, l.source_url, l.source_title, l.created_at, l.updated_at
+    </sql>
+
+    <sql id="from">
+        FROM crm_lead l
+        JOIN ent_enterprise e ON l.enterprise_id = e.id
+        LEFT JOIN crm_project p ON l.project_id = p.id
+        LEFT JOIN sys_user u ON l.owner_id = u.id
+    </sql>
+
+    <sql id="filter">
+        <where>
+            <if test="scopeOwner != null">AND l.owner_id = #{scopeOwner}</if>
+            <if test="keyword != null">
+                AND (e.name LIKE #{keyword} ESCAPE '!' OR p.project_name LIKE #{keyword} ESCAPE '!')
+            </if>
+            <if test="status != null">AND l.lead_status = #{status}</if>
+            <if test="enterprise != null">AND l.enterprise_id = #{enterprise}</if>
+            <if test="project != null">AND l.project_id = #{project}</if>
+            <if test="owner != null">AND l.owner_id = #{owner}</if>
+            <if test="due != null">
+                AND (l.lead_status NOT IN ('WON', 'LOST') AND l.next_followup_at IS NOT NULL
+                AND (
+                    <choose>
+                        <when test="due == 'overdue'">
+                            l.next_followup_at <![CDATA[<]]> NOW()
+                        </when>
+                        <when test="due == 'today'">
+                            l.next_followup_at <![CDATA[>=]]> NOW()
+                            AND l.next_followup_at <![CDATA[<]]> CURRENT_DATE + INTERVAL 1 DAY
+                        </when>
+                        <when test="due == 'upcoming'">
+                            l.next_followup_at <![CDATA[>=]]> NOW()
+                            AND l.next_followup_at <![CDATA[<]]> CURRENT_DATE + INTERVAL 7 DAY
+                        </when>
+                        <otherwise>1 = 0</otherwise>
+                    </choose>
+                ))
+            </if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        <include refid="from"/>
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        <include refid="filter"/>
+        ORDER BY l.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        <include refid="from"/>
+        WHERE l.id = #{id}
+        <if test="scopeOwner != null">AND l.owner_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="findBySourceHash" resultType="java.util.LinkedHashMap">
+        SELECT id, source_url, source_title FROM crm_lead WHERE source_url_hash = #{hash}
+    </select>
+
+    <select id="lockById" resultType="java.util.LinkedHashMap">
+        SELECT id, enterprise_id, project_id, source_channel, lead_status FROM crm_lead
+        WHERE id = #{id}
+        <if test="scopeOwner != null">AND owner_id = #{scopeOwner}</if>
+        FOR UPDATE
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_lead
+          (enterprise_id, project_id, source_channel, lead_status, lead_score, owner_id,
+           next_followup_at, created_by)
+        VALUES
+          (#{enterprise}, #{project}, #{source}, #{status}, #{score}, #{owner}, #{nextFollowup}, #{actor})
+    </insert>
+
+    <insert id="insertFromBid" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_lead
+          (enterprise_id, project_id, source_channel, lead_status, owner_id, next_followup_at,
+           created_by, source_type, source_url, source_url_hash, source_title)
+        VALUES
+          (#{enterprise}, #{project}, #{source}, 'NEW', #{owner}, #{nextFollowup},
+           #{actor}, #{sourceType}, #{sourceUrl}, #{sourceHash}, #{sourceTitle})
+    </insert>
+
+    <update id="update">
+        UPDATE crm_lead SET enterprise_id = #{enterprise}, project_id = #{project},
+          source_channel = #{source}, lead_status = #{status}, lead_score = #{score},
+          owner_id = #{owner}, next_followup_at = #{nextFollowup}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE crm_lead SET lead_status = #{status} WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM crm_lead WHERE id = #{id}
+    </delete>
+
+    <select id="countFollowups" resultType="long">
+        SELECT COUNT(*) FROM crm_followup WHERE lead_id = #{id}
+    </select>
+
+    <sql id="followupFields">
+        f.id, f.lead_id, f.contact_id, c.name AS contact_name,
+        f.followup_type, f.content, f.result, f.next_action, f.next_followup_at,
+        f.created_by, u.username AS created_by_username, f.created_at
+    </sql>
+
+    <sql id="followupFrom">
+        FROM crm_followup f
+        JOIN crm_lead l ON f.lead_id = l.id
+        LEFT JOIN crm_contact c ON f.contact_id = c.id
+        LEFT JOIN sys_user u ON f.created_by = u.id
+    </sql>
+
+    <select id="countFollowupsPage" resultType="long">
+        SELECT COUNT(*) FROM crm_followup f JOIN crm_lead l ON f.lead_id = l.id
+        WHERE f.lead_id = #{id}
+        <if test="scopeOwner != null">AND l.owner_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="listFollowups" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="followupFields"/>
+        <include refid="followupFrom"/>
+        WHERE f.lead_id = #{id}
+        <if test="scopeOwner != null">AND l.owner_id = #{scopeOwner}</if>
+        ORDER BY f.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="lockContact" resultType="long">
+        SELECT id FROM crm_contact
+        WHERE id = #{contact} AND enterprise_id = #{enterprise} FOR SHARE
+    </select>
+
+    <insert id="insertFollowup" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_followup
+          (lead_id, contact_id, followup_type, content, result, next_action, next_followup_at, created_by)
+        VALUES
+          (#{lead}, #{contact}, #{type}, #{content}, #{result}, #{action}, #{nextFollowup}, #{actor})
+    </insert>
+
+    <update id="updateNextFollowup">
+        UPDATE crm_lead SET next_followup_at = #{nextFollowup} WHERE id = #{id}
+    </update>
+
+    <select id="findFollowup" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="followupFields"/>
+        <include refid="followupFrom"/>
+        WHERE f.id = #{id}
+    </select>
+</mapper>

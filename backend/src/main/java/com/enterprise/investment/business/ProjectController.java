@@ -1,5 +1,8 @@
 package com.enterprise.investment.business;
 
+import com.enterprise.investment.mapper.AccountMapper;
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.ProjectMapper;
 import com.enterprise.investment.security.AccountPrincipal;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
@@ -18,43 +21,45 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Set;
 
-import static com.enterprise.investment.business.BusinessData.*;
+import static com.enterprise.investment.business.Rows.contains;
+import static com.enterprise.investment.business.Rows.params;
+import static com.enterprise.investment.business.Rows.trimmed;
+import static com.enterprise.investment.business.Rows.view;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @RestController
-@RequestMapping("/api/projects")
-@PreAuthorize("hasAnyRole('ADMIN','INVESTMENT_MANAGER','INVESTMENT_OFFICER')")
+@RequestMapping({"/api/projects", "/api/buildings"})
+@PreAuthorize("@ss.hasPermission('project:view')")
 public class ProjectController {
-    private static final String WRITE = "hasAnyRole('ADMIN','INVESTMENT_MANAGER')";
+    private static final String WRITE = "@ss.hasPermission('project:write')";
     private static final String ENTITY = "PROJECT";
     private static final Set<String> STATUSES = Set.of("DRAFT", "ACTIVE", "PAUSED", "CLOSED");
-    private static final String FIELDS = """
-            p.id, p.project_name, p.province_code, p.city_code, p.industry_code, p.investment_min,
-            p.investment_max, p.requirements, p.project_status, p.owner_id, u.username AS owner_username,
-            p.created_at, p.updated_at
-            """;
-    private static final String FROM = "FROM crm_project p LEFT JOIN sys_user u ON p.owner_id = u.id";
-    private final BusinessData db;
+    private final ProjectMapper projects;
+    private final AccountMapper accounts;
+    private final AuditMapper audits;
 
-    ProjectController(BusinessData db) {
-        this.db = db;
+    ProjectController(ProjectMapper projects, AccountMapper accounts, AuditMapper audits) {
+        this.projects = projects;
+        this.accounts = accounts;
+        this.audits = audits;
     }
 
     @GetMapping
-    public BusinessData.Page list(@RequestParam(required = false) String keyword,
-                                  @RequestParam(required = false) String projectStatus,
-                                  @RequestParam(defaultValue = "1") int page,
-                                  @RequestParam(defaultValue = "20") int size) {
-        return db.page(FIELDS, FROM, """
-                 WHERE (:keyword IS NULL OR p.project_name LIKE :keyword ESCAPE '!')
-                   AND (:status IS NULL OR p.project_status = :status)
-                """, "p.id DESC",
-                params("keyword", trimmed(keyword) == null ? null : contains(keyword), "status", trimmed(projectStatus)),
-                page, size);
+    public PageResult list(@RequestParam(required = false) String keyword,
+                           @RequestParam(required = false) String projectStatus,
+                           @RequestParam(defaultValue = "1") int page,
+                           @RequestParam(defaultValue = "20") int size) {
+        long offset = Paging.offset(page, size);
+        String filterKeyword = trimmed(keyword) == null ? null : contains(keyword);
+        String status = trimmed(projectStatus);
+        long total = projects.count(filterKeyword, status);
+        var items = projects.list(filterKeyword, status, size, offset).stream().map(Rows::view).toList();
+        return new PageResult(items, total);
     }
 
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable long id) {
-        return view(db.one("SELECT " + FIELDS + FROM + " WHERE p.id = :id", params("id", id), "招商项目不存在"));
+        return view(Rows.required(projects.findById(id), "招商项目不存在"));
     }
 
     @PostMapping
@@ -65,13 +70,9 @@ public class ProjectController {
                                       @AuthenticationPrincipal AccountPrincipal actor) {
         var values = values(input);
         values.put("actor", actor.id());
-        long id = db.insert("""
-                INSERT INTO crm_project
-                  (project_name, province_code, city_code, industry_code, investment_min, investment_max,
-                   requirements, project_status, owner_id, created_by)
-                VALUES (:projectName, :province, :city, :industry, :min, :max, :requirements, :status, :owner, :actor)
-                """, values);
-        db.audit(actor.id(), "CREATE", ENTITY, id);
+        projects.insert(values);
+        long id = ((Number) values.get("id")).longValue();
+        audits.record(actor.id(), "CREATE", ENTITY, id);
         return get(id);
     }
 
@@ -83,13 +84,8 @@ public class ProjectController {
         lock(id);
         var values = values(input);
         values.put("id", id);
-        db.update("""
-                UPDATE crm_project SET project_name = :projectName, province_code = :province, city_code = :city,
-                  industry_code = :industry, investment_min = :min, investment_max = :max, requirements = :requirements,
-                  project_status = :status, owner_id = :owner
-                WHERE id = :id
-                """, values);
-        db.audit(actor.id(), "UPDATE", ENTITY, id);
+        projects.update(values);
+        audits.record(actor.id(), "UPDATE", ENTITY, id);
         return get(id);
     }
 
@@ -99,12 +95,14 @@ public class ProjectController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable long id, @AuthenticationPrincipal AccountPrincipal actor) {
         lock(id);
-        db.update("DELETE FROM crm_project WHERE id = :id", params("id", id));
-        db.audit(actor.id(), "DELETE", ENTITY, id);
+        projects.delete(id);
+        audits.record(actor.id(), "DELETE", ENTITY, id);
     }
 
     private void lock(long id) {
-        db.one("SELECT id FROM crm_project WHERE id = :id FOR UPDATE", params("id", id), "招商项目不存在");
+        if (projects.lock(id) == null) {
+            throw new ResponseStatusException(NOT_FOUND, "招商项目不存在");
+        }
     }
 
     private Map<String, Object> values(ProjectInput input) {
@@ -116,7 +114,9 @@ public class ProjectController {
                 && input.investmentMin().compareTo(input.investmentMax()) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "最低投资规模不能超过最高投资规模");
         }
-        db.checkAssignable(input.ownerId());
+        if (input.ownerId() != null && accounts.findAssignable(input.ownerId()) == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "负责人必须是已启用的管理员或招商人员");
+        }
         return params("projectName", trimmed(input.projectName()), "province", trimmed(input.provinceCode()),
                 "city", trimmed(input.cityCode()), "industry", trimmed(input.industryCode()),
                 "min", input.investmentMin(), "max", input.investmentMax(),

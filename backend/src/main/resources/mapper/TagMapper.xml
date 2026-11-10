@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.TagMapper">
+
+    <sql id="filter">
+        <where>
+            <if test="keyword != null">tag_name LIKE #{keyword} ESCAPE '!'</if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM ent_tag
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT id, tag_name, tag_type FROM ent_tag
+        <include refid="filter"/>
+        ORDER BY tag_name, id
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ent_tag (tag_name, tag_type) VALUES (#{name}, #{type})
+    </insert>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT id, tag_name, tag_type FROM ent_tag WHERE id = #{id}
+    </select>
+
+    <select id="assigned" resultType="java.util.LinkedHashMap">
+        SELECT t.id, t.tag_name, t.tag_type
+        FROM ent_tag t JOIN ent_enterprise_tag et ON et.tag_id = t.id
+        WHERE et.enterprise_id = #{enterprise}
+        ORDER BY t.tag_name, t.id
+    </select>
+
+    <select id="existsEnterprise" resultType="long">
+        SELECT id FROM ent_enterprise WHERE id = #{id}
+    </select>
+
+    <select id="lockEnterprise" resultType="long">
+        SELECT id FROM ent_enterprise WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <select id="countExisting" resultType="long">
+        SELECT COUNT(*) FROM ent_tag WHERE id IN
+        <foreach collection="tags" item="tag" open="(" separator="," close=")">
+            #{tag}
+        </foreach>
+    </select>
+
+    <delete id="clearEnterpriseTags">
+        DELETE FROM ent_enterprise_tag WHERE enterprise_id = #{enterprise}
+    </delete>
+
+    <insert id="assignEnterpriseTag">
+        INSERT INTO ent_enterprise_tag (enterprise_id, tag_id) VALUES (#{enterprise}, #{tag})
+    </insert>
+</mapper>
