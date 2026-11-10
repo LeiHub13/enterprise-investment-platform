@@ -1,0 +1,9 @@
+# Reuse the images already built by the main development stack. Test data and
+# volumes are created under a unique project and removed by run_isolated_e2e.ps1.
+services:
+  business-api:
+    image: enterprise-resource-business-api:latest
+  agent:
+    image: enterprise-resource-agent:latest
+  web:
+    image: enterprise-resource-web:latest
