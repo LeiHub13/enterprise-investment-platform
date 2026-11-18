@@ -8,19 +8,8 @@
 
 | 目录或文件 | 内容 |
 | --- | --- |
-| `enterprise_db.sql` | 企业、招商、CRM、数据治理、账号、审计及 RBAC 的 MySQL 建表脚本 |
-| `auth_rbac_upgrade.sql` | 存量数据库升级脚本：Token 认证表、角色、菜单权限和数据范围 |
-| `crm_upgrade.sql` | 存量数据库升级脚本：商机、合同、回款表及 CRM 菜单权限 |
-| `bidradar_upgrade.sql` | 存量数据库升级脚本：标讯雷达菜单及线索/商机来源字段 |
-| `module_grouping_upgrade.sql` | 存量数据库升级脚本：CRM业务模块、标讯雷达模块、OpenClaw 模块分组 |
-| `collector_console_upgrade.sql` | 存量数据库升级脚本：数据采集模块下的采集器只读页面菜单 |
-| `agent_score_v2_upgrade.sql`、`agent_pending_leads_upgrade.sql`、`agent_building_seed_upgrade.sql` | 招商 Agent 三分评分、待审核线索和默认楼宇目标的增量迁移 |
-| `collector_event_outbox_upgrade.sql` | 采集事件事务型发件箱和 RabbitMQ 投递状态 |
-| `collector_incremental_upgrade.sql` | 采集来源版本游标、新增/更新/过期事件及历史记录 |
-| `agent_event_dispatch_upgrade.sql`、`collector_monitor_upgrade.sql` | 事件触发去重和按企业配置的监测任务 |
-| `enterprise_verification_upgrade.sql` | 企查查主体核验记录、来源和时效 |
+| `enterprise_db.sql` | MySQL 全量建库脚本：企业、招商、CRM、数据治理、账号、审计、RBAC、Agent、采集与事件流水线 |
 | `seed_collector_demo.sql` | 采集器演示数据：20 条采集记录和 20 条企业信号 |
-| `panyue_agent_menu_upgrade.sql` | 存量数据库升级脚本：隐藏旧泛悦 Agent 状态页菜单 |
 | `backend/src/main/java/com/enterprise/investment/business` | CRM 业务模块：企业档案、导入、项目、线索、商机、合同、回款及跟进接口 |
 | `backend/src/main/java/com/enterprise/investment/bidradar` | 标讯雷达模块：标讯查询代理及标讯转线索/商机 |
 | `backend/src/main/java/com/enterprise/investment/openclaw` | OpenClaw 模块：网关状态检查与对话代理 |
@@ -70,22 +59,7 @@ docker compose --profile app up -d --build --wait
 
 打开 `http://127.0.0.1:8088`，默认管理员用户名为 `admin`。容器中的 Agent 使用 PostgreSQL checkpoint，业务数据仍通过 Spring Boot 访问 MySQL。`MYSQL_PORT`、`APP_WEB_PORT` 等可以按需调整；Compose 的示例口令只用于本机开发。自定义 `AGENT_POSTGRES_PASSWORD` 时 Agent 会自动使用同一密码构造连接，特殊字符会编码。
 
-新 MySQL 数据卷会依次执行基础 SQL 及 Agent 升级脚本；**已有数据卷不会自动运行新增的初始化脚本**。请先备份已有数据库，再按顺序执行 `agent_upgrade.sql`、`data_upgrade.sql`、`event_pipeline_upgrade.sql`、`agent_score_v2_upgrade.sql`、`collector_event_outbox_upgrade.sql`、`agent_pending_leads_upgrade.sql`、`collector_incremental_upgrade.sql`、`agent_event_dispatch_upgrade.sql`、`collector_monitor_upgrade.sql`、`enterprise_verification_upgrade.sql`、`agent_building_seed_upgrade.sql`。新增迁移会记录在 `investment_schema_migration`；默认楼宇的 100～300㎡ 是招商目标，实际可租面积、地址、租金及配套仍为未知。旧数据不会被自动迁入新建数据库。
-
-例如，在已用 `mysql_config_editor` 配好 `enterprise` 登录路径后，可从项目根目录在 PowerShell 执行：
-
-```powershell
-$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$migrations = @('agent_upgrade.sql', 'data_upgrade.sql', 'event_pipeline_upgrade.sql',
-  'agent_score_v2_upgrade.sql', 'collector_event_outbox_upgrade.sql',
-  'agent_pending_leads_upgrade.sql', 'collector_incremental_upgrade.sql',
-  'agent_event_dispatch_upgrade.sql', 'collector_monitor_upgrade.sql', 'enterprise_verification_upgrade.sql',
-  'agent_building_seed_upgrade.sql')
-foreach ($file in $migrations) {
-  Get-Content -LiteralPath $file -Raw -Encoding UTF8 | mysql.exe --login-path=enterprise --default-character-set=utf8mb4 enterprise_db
-  if ($LASTEXITCODE -ne 0) { throw "迁移失败：$file" }
-}
-```
+新 MySQL 数据卷会执行 `enterprise_db.sql`，它是包含 Agent、采集、事件流水线结构与菜单的全量 schema；**已有数据卷不会自动重新执行**。默认楼宇的 100～300㎡ 是招商目标，实际可租面积、地址、租金及配套仍为未知。旧数据不会被自动迁入新建数据库。
 
 对象存储目前不参与 Agent 主流程，单独使用 `docker compose --profile storage up -d minio` 启动。MinIO 社区版目前为[源码分发](https://github.com/minio/minio)，官方镜像仓库可用性可能变化；可通过 `MINIO_IMAGE` 指定自行构建并验证的镜像。Compose 内置的存储密码仅供本机开发。
 
@@ -105,27 +79,7 @@ foreach ($file in $migrations) {
 
    使用本机 MySQL 时，先用数据库管理账号执行 `enterprise_db.sql`，再配置后端的 `DB_URL`、`MYSQL_USER` 和 `MYSQL_PASSWORD`。应用账号需要访问 `enterprise_db` 下的表。
 
-   已有旧版 `enterprise_db` 时，先备份数据库，再执行升级脚本补齐 Token 与 RBAC 表：
-
-   ```powershell
-   mysql -uroot -p --default-character-set=utf8mb4 enterprise_db < auth_rbac_upgrade.sql
-   ```
-
-   升级脚本会把现有 `sys_user.role` 映射到角色，内置管理员密码和业务数据不会改变。
-
-   如果数据库已有 RBAC 但没有 CRM 表，只执行 CRM 升级：
-
-   ```powershell
-   mysql -uroot -p --default-character-set=utf8mb4 enterprise_db < crm_upgrade.sql
-   ```
-
-`crm_upgrade.sql` 只新增表、菜单和授权，不改动现有企业、项目、线索数据。
-
-接入标讯雷达时再执行一次来源字段和菜单升级（脚本中的 `ALTER TABLE` 只需执行一次）：
-
-```powershell
-mysql -uroot -p --default-character-set=utf8mb4 enterprise_db < bidradar_upgrade.sql
-```
+   旧版本数据卷缺少新增表或列时，请先备份，再从 Git 历史获取对应版本的升级脚本按顺序补齐。
 
 2. 打开一个终端，设置首次启动的管理员密码并运行后端。
 
@@ -200,8 +154,6 @@ CRM 采用“客户 + 项目资源 + 线索 + 商机”的模型：
 - **合同/回款**：签约合同挂在客户和商机上；合同标记为“已签约”时自动把商机改为“赢单”；回款按合同登记计划和实收。
 
 页面入口为左侧“商机”“合同”“回款”“业绩统计”。企业详情顶部展示“客户 360”，聚合联系人数、线索、商机、合同和回款。CRM 权限点为 `business:*`、`contract:*`、`receivable:*`、`statistics:view`，数据范围支持 `ALL` 和 `SELF`，管理员可在角色权限页配置。
-
-存量数据库执行 `crm_upgrade.sql` 即可新增表和菜单，不会改动现有企业、项目、线索数据。
 
 ## 标讯雷达
 

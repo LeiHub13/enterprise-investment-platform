@@ -73,9 +73,9 @@ cd frontend && npm run build && npm run preview -- --port 5173 --strictPort
 
 ## 6. 数据库与迁移
 
-- 新库：`enterprise_db.sql`；存量库：根目录 `*_upgrade.sql` **均为幂等脚本**（`IF NOT EXISTS` / 动态 `ALTER`），按需执行；新迁移记录在 `investment_schema_migration`。
-- **执行顺序**以 `README.md`「本地启动」列出的顺序为准（`agent_upgrade.sql` → `data_upgrade.sql` → `event_pipeline_upgrade.sql` → `agent_score_v2_upgrade.sql` → `collector_event_outbox_upgrade.sql` → … → `agent_building_seed_upgrade.sql`）。
-- **关键前提**：`data_upgrade.sql` 给 `crm_project` 加 `address/area_min/area_max/rent_price/facilities`、给 `ent_company_signal` 加 `source_record_id/confidence/expires_at`——`ProjectMapper` 和 Agent 评分/楼宇匹配依赖这些列，未执行会直接报错。
+- `enterprise_db.sql` 是全量建库脚本（含 RBAC、CRM、Agent、采集、事件流水线结构与菜单），新库直接执行；compose 只挂载这一个文件。
+- **关键前提**：`crm_project` 的 `address/area_min/area_max/rent_price/facilities`、`ent_company_signal` 的 `source_record_id/confidence/expires_at` 已在全量 schema 中，`ProjectMapper` 和 Agent 评分/楼宇匹配依赖这些列。
+- 历史增量脚本已并入全量 schema 并删除；升级旧数据卷时从 Git 历史取对应版本的 `*_upgrade.sql`。
 - 企业/项目主表：`ent_enterprise`、`crm_project`（一楼宇一项目，含面积/地址/配套）；采集原始记录 `collector_record`、信号 `ent_company_signal`、线索证据 `crm_lead_evidence`、观察记录 `crm_lead_observation`。
 
 ## 7. 常见坑（Windows 本机，务必看）
@@ -107,8 +107,7 @@ cd frontend && npm run build && npm run preview -- --port 5173 --strictPort
 
 ## 9. 先读哪些文档
 
-- `README.md` — 部署、容器、角色与数据范围、迁移顺序。
+- `README.md` — 部署、容器、角色与数据范围。
 - `agent/README.md` — Agent 目录、接口契约（前端/后端/工具三段）、SSE 事件、安全边界、测试。
 - `docs/招商Agent重构计划.md` — 架构现状、目标与分阶段进度。
 - `collector/README.md` — 采集口径、企查查接口、成本控制、未接入项。
-- 各 `*_upgrade.sql` 头部注释 — 每个迁移解决什么问题。

@@ -14,17 +14,6 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./enterprise_db.sql:/docker-entrypoint-initdb.d/01-enterprise_db.sql:ro
-      - ./agent_upgrade.sql:/docker-entrypoint-initdb.d/20-agent.sql:ro
-      - ./data_upgrade.sql:/docker-entrypoint-initdb.d/30-data.sql:ro
-      - ./event_pipeline_upgrade.sql:/docker-entrypoint-initdb.d/40-event.sql:ro
-      - ./agent_score_v2_upgrade.sql:/docker-entrypoint-initdb.d/50-score.sql:ro
-      - ./collector_event_outbox_upgrade.sql:/docker-entrypoint-initdb.d/55-outbox.sql:ro
-      - ./agent_pending_leads_upgrade.sql:/docker-entrypoint-initdb.d/60-pending.sql:ro
-      - ./collector_incremental_upgrade.sql:/docker-entrypoint-initdb.d/65-collector-incremental.sql:ro
-      - ./agent_event_dispatch_upgrade.sql:/docker-entrypoint-initdb.d/66-agent-event-dispatch.sql:ro
-      - ./collector_monitor_upgrade.sql:/docker-entrypoint-initdb.d/67-collector-monitor.sql:ro
-      - ./enterprise_verification_upgrade.sql:/docker-entrypoint-initdb.d/68-enterprise-verification.sql:ro
-      - ./agent_building_seed_upgrade.sql:/docker-entrypoint-initdb.d/70-building.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "--protocol=tcp", "--host=127.0.0.1", "--silent"]
       interval: 5s

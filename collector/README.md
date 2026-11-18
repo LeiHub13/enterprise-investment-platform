@@ -69,7 +69,7 @@ py -3 -m collector.sync --status                                     # 采集入
 
 ## 企业主体核验
 
-已按 [企查查企业信息核验 2001 文档](https://openapi.qcc.com/dataApi/2001) 实现企业全称或信用代码查询。2001 与招聘 718 需分别取得接口授权；真实请求可能计费，需先确认合同及额度。提供 `QCC_APP_KEY`、`QCC_SECRET_KEY`、`COLLECTOR_TOKEN`，并对既有库执行 `enterprise_verification_upgrade.sql`。
+已按 [企查查企业信息核验 2001 文档](https://openapi.qcc.com/dataApi/2001) 实现企业全称或信用代码查询。2001 与招聘 718 需分别取得接口授权；真实请求可能计费，需先确认合同及额度。提供 `QCC_APP_KEY`、`QCC_SECRET_KEY`、`COLLECTOR_TOKEN`；核验表 `ent_enterprise_verification` 已包含在 `enterprise_db.sql` 全量 schema 中，旧数据卷需先补齐该表。
 
 ```bash
 python -m collector.verify --company "已入库企业全称"                  # 仅预览，不联网也不写库
@@ -83,7 +83,7 @@ python -m collector.verify --company "已入库企业全称" --execute        # 
 
 ## RabbitMQ 事件投递
 
-先对业务库执行 `collector_event_outbox_upgrade.sql`，并安装 `uv pip install -r collector/requirements.txt`。采集记录、信号和发件箱事件由 Java 在同一事务中保存。配置 `RABBITMQ_URL` 与 `COLLECTOR_TOKEN` 后，可运行 `python -m collector.events.publisher --watch` 持续投递，或在采集命令中添加 `--publish-events`。
+发件箱表 `collector_event_outbox` 已包含在 `enterprise_db.sql` 全量 schema 中（旧数据卷需先补齐）；安装 `uv pip install -r collector/requirements.txt`。采集记录、信号和发件箱事件由 Java 在同一事务中保存。配置 `RABBITMQ_URL` 与 `COLLECTOR_TOKEN` 后，可运行 `python -m collector.events.publisher --watch` 持续投递，或在采集命令中添加 `--publish-events`。
 
 发布使用持久队列和 broker confirm；中断后租约会过期并重试。事件类型区分 `COLLECTOR_RECORD_CREATED`、`COLLECTOR_RECORD_UPDATED` 和 `COLLECTOR_RECORD_EXPIRED`；同一条记录的创建与失效事件分别拥有独立事件 ID。如果消息已被 RabbitMQ 接收但确认业务 API 失败，消息可能重复，消费者按事件 ID 去重。
 
