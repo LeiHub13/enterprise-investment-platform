@@ -1,0 +1,26 @@
+[
+  {
+    "JobName": "Java 后端开发工程师",
+    "StartDate": "2026-11-02",
+    "Salary": "18-28K",
+    "Education": "本科",
+    "Experience": "3-5年",
+    "Address": "南京·鼓楼区"
+  },
+  {
+    "JobName": "实施顾问（工业软件）",
+    "StartDate": "2026-11-04",
+    "Salary": "12-18K",
+    "Education": "本科",
+    "Experience": "1-3年",
+    "Address": "南京·江北新区"
+  },
+  {
+    "JobName": "售前解决方案工程师",
+    "StartDate": "2026-11-05",
+    "Salary": "15-22K",
+    "Education": "本科",
+    "Experience": "3-5年",
+    "Address": "南京·鼓楼区"
+  }
+]

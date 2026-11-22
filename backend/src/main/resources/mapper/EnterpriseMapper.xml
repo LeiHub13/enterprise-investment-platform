@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.EnterpriseMapper">
+
+    <sql id="fields">
+        id, uscc, name, name_normalized, enterprise_type, province_code, city_code, district_code,
+        industry_code, industry_name, registered_capital, established_date, business_status,
+        registered_address, business_scope, website, source_id, last_verified_at, created_at, updated_at
+    </sql>
+
+    <sql id="filter">
+        <where>
+            <if test="keyword != null">
+                AND (name_normalized LIKE #{keyword} ESCAPE '!'
+                     OR CONVERT(uscc USING utf8mb4) LIKE #{keyword} ESCAPE '!')
+            </if>
+            <if test="provinces != null and !provinces.isEmpty()">
+                AND province_code IN
+                <foreach collection="provinces" item="region" open="(" separator="," close=")">#{region}</foreach>
+            </if>
+            <if test="cities != null and !cities.isEmpty()">
+                AND city_code IN
+                <foreach collection="cities" item="region" open="(" separator="," close=")">#{region}</foreach>
+            </if>
+            <if test="industry != null">AND industry_code = #{industry}</if>
+            <if test="status != null">AND business_status = #{status}</if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/>
+        FROM ent_enterprise
+        <include refid="filter"/>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> FROM ent_enterprise WHERE id = #{id}
+    </select>
+
+    <select id="findByIdForUpdate" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> FROM ent_enterprise WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <select id="exists" resultType="long">
+        SELECT id FROM ent_enterprise WHERE id = #{id}
+    </select>
+
+    <select id="countCandidates" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise
+        WHERE name_normalized = #{name_normalized}
+          AND (#{uscc} IS NULL OR uscc IS NULL)
+          <if test="province_code != null">
+              AND (province_code IS NULL OR province_code IN
+              <foreach collection="province_variants" item="region" open="(" separator="," close=")">#{region}</foreach>)
+          </if>
+          <if test="city_code != null">
+              AND (city_code IS NULL OR city_code IN
+              <foreach collection="city_variants" item="region" open="(" separator="," close=")">#{region}</foreach>)
+          </if>
+          <if test="district_code != null">
+              AND (district_code IS NULL OR district_code IN
+              <foreach collection="district_variants" item="region" open="(" separator="," close=")">#{region}</foreach>)
+          </if>
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ent_enterprise
+          (uscc, name, name_normalized, enterprise_type, province_code, city_code, district_code,
+           industry_code, industry_name, registered_capital, established_date, business_status,
+           registered_address, business_scope, website, last_verified_at, source_id)
+        VALUES
+          (#{uscc}, #{name}, #{name_normalized}, #{enterprise_type}, #{province_code}, #{city_code},
+           #{district_code}, #{industry_code}, #{industry_name}, #{registered_capital},
+           #{established_date}, #{business_status}, #{registered_address}, #{business_scope},
+           #{website}, #{last_verified_at}, #{source_id})
+    </insert>
+
+    <update id="update">
+        UPDATE ent_enterprise SET
+          uscc = #{uscc}, name = #{name}, name_normalized = #{name_normalized},
+          enterprise_type = #{enterprise_type}, province_code = #{province_code},
+          city_code = #{city_code}, district_code = #{district_code},
+          industry_code = #{industry_code}, industry_name = #{industry_name},
+          registered_capital = #{registered_capital}, established_date = #{established_date},
+          business_status = #{business_status}, registered_address = #{registered_address},
+          business_scope = #{business_scope}, website = #{website},
+          last_verified_at = #{last_verified_at}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM ent_enterprise WHERE id = #{id}
+    </delete>
+
+    <select id="findDataSource" resultType="long">
+        SELECT id FROM data_source
+        WHERE source_type = #{type} AND source_name = #{name} AND enabled = TRUE
+    </select>
+
+    <select id="lockDataSource" resultType="long">
+        SELECT id FROM data_source WHERE id = #{id} AND enabled = TRUE FOR UPDATE
+    </select>
+
+    <insert id="insertSourceRecord" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO data_source_record
+          (source_id, enterprise_id, import_batch_id, external_id, entity_key, raw_payload,
+           checksum, parse_status, parse_error, fetched_at)
+        VALUES
+          (#{source}, #{enterprise}, #{batch}, #{row}, #{entityKey}, #{payload},
+           #{checksum}, #{status}, #{error}, #{fetchedAt})
+    </insert>
+
+    <insert id="insertChange">
+        INSERT INTO ent_enterprise_change
+          (enterprise_id, source_record_id, field_name, old_value, new_value, changed_by)
+        VALUES
+          (#{enterprise}, #{sourceRecord}, #{field}, #{oldValue}, #{newValue}, #{actor})
+    </insert>
+</mapper>

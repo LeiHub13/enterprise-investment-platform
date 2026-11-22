@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ContactMapper">
+
+    <sql id="fields">
+        id, enterprise_id, name, position, phone_ciphertext, email_ciphertext, created_at, updated_at
+    </sql>
+
+    <sql id="filter">
+        <where>
+            enterprise_id = #{enterprise}
+            <if test="keyword != null">AND name LIKE #{keyword} ESCAPE '!'</if>
+        </where>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM crm_contact
+        <include refid="filter"/>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> FROM crm_contact
+        <include refid="filter"/>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> FROM crm_contact
+        WHERE enterprise_id = #{enterprise} AND id = #{id}
+    </select>
+
+    <select id="findByIdForUpdate" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="fields"/> FROM crm_contact
+        WHERE enterprise_id = #{enterprise} AND id = #{id} FOR UPDATE
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_contact (enterprise_id, name, position)
+        VALUES (#{enterprise}, #{name}, #{position})
+    </insert>
+
+    <update id="updateBasic">
+        UPDATE crm_contact SET name = #{name}, position = #{position} WHERE id = #{id}
+    </update>
+
+    <update id="updateSensitive">
+        UPDATE crm_contact SET phone_ciphertext = #{phone}, email_ciphertext = #{email} WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM crm_contact WHERE id = #{id}
+    </delete>
+
+    <select id="lockFollowup" resultType="long">
+        SELECT id FROM crm_followup WHERE contact_id = #{contact} LIMIT 1 FOR UPDATE
+    </select>
+
+    <select id="findAccessibleEnterprise" resultType="long">
+        SELECT e.id FROM ent_enterprise e
+        WHERE e.id = #{enterprise}
+        <if test="owner != null">
+            AND EXISTS (
+                SELECT 1 FROM crm_lead l WHERE l.enterprise_id = e.id AND l.owner_id = #{owner}
+            )
+        </if>
+    </select>
+</mapper>

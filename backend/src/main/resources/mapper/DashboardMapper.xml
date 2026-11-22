@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.DashboardMapper">
+
+    <select id="countEnterprises" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise
+    </select>
+
+    <select id="leadCounts" resultType="java.util.LinkedHashMap">
+        SELECT COUNT(*) AS leads,
+               COALESCE(SUM(CASE WHEN next_followup_at <![CDATA[<]]> NOW()
+                   AND lead_status NOT IN ('WON', 'LOST') THEN 1 ELSE 0 END), 0) AS overdue,
+               COALESCE(SUM(CASE WHEN next_followup_at <![CDATA[>=]]> NOW()
+                   AND next_followup_at <![CDATA[<]]> CURRENT_DATE + INTERVAL 1 DAY
+                   AND lead_status NOT IN ('WON', 'LOST') THEN 1 ELSE 0 END), 0) AS today,
+               COALESCE(SUM(CASE WHEN next_followup_at <![CDATA[>=]]> NOW()
+                   AND next_followup_at <![CDATA[<]]> CURRENT_DATE + INTERVAL 7 DAY
+                   AND lead_status NOT IN ('WON', 'LOST') THEN 1 ELSE 0 END), 0) AS upcoming
+        FROM crm_lead
+        <where>
+            <if test="owner != null">owner_id = #{owner}</if>
+        </where>
+    </select>
+
+    <select id="countProjects" resultType="long">
+        SELECT COUNT(*) FROM crm_project
+    </select>
+
+    <select id="reminders" resultType="java.util.LinkedHashMap">
+        SELECT l.id, l.enterprise_id, e.name AS enterprise_name, p.project_name,
+               l.lead_status, l.next_followup_at
+        FROM crm_lead l
+        JOIN ent_enterprise e ON e.id = l.enterprise_id
+        LEFT JOIN crm_project p ON p.id = l.project_id
+        <where>
+            <if test="owner != null">AND l.owner_id = #{owner}</if>
+            AND l.lead_status NOT IN ('WON', 'LOST')
+            AND l.next_followup_at IS NOT NULL
+            AND l.next_followup_at <![CDATA[<]]> CURRENT_DATE + INTERVAL 7 DAY
+        </where>
+        ORDER BY l.next_followup_at, l.id
+        LIMIT 20
+    </select>
+</mapper>

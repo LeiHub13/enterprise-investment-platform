@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.ReceivableMapper">
+
+    <sql id="columns">
+        r.id, r.receivable_no, r.contract_id, c.contract_no, c.name AS contract_name,
+        r.customer_id, cu.name AS customer_name, r.business_id, b.name AS business_name,
+        r.owner_user_id, u.username AS owner_username, r.plan_amount, r.plan_date,
+        r.received_amount, r.received_date, r.status, r.remark, r.created_at, r.updated_at
+    </sql>
+
+    <sql id="joins">
+        FROM crm_receivable r
+        JOIN crm_contract c ON c.id = r.contract_id
+        JOIN ent_enterprise cu ON cu.id = r.customer_id
+        LEFT JOIN crm_business b ON b.id = r.business_id
+        LEFT JOIN sys_user u ON u.id = r.owner_user_id
+    </sql>
+
+    <sql id="filters">
+        <if test="scopeOwner != null">AND r.owner_user_id = #{scopeOwner}</if>
+        <if test="keyword != null">AND (r.receivable_no LIKE #{keyword} OR c.contract_no LIKE #{keyword}
+            OR c.name LIKE #{keyword} OR cu.name LIKE #{keyword})</if>
+        <if test="status != null">AND r.status = #{status}</if>
+        <if test="contract != null">AND r.contract_id = #{contract}</if>
+        <if test="customer != null">AND r.customer_id = #{customer}</if>
+        <if test="owner != null">AND r.owner_user_id = #{owner}</if>
+    </sql>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) <include refid="joins"/>
+        <where><include refid="filters"/></where>
+    </select>
+
+    <select id="list" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        <where><include refid="filters"/></where>
+        ORDER BY r.plan_date DESC, r.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="findById" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        WHERE r.id = #{id}
+        <if test="scopeOwner != null">AND r.owner_user_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="lockById" resultType="java.util.LinkedHashMap">
+        SELECT id, contract_id, customer_id, business_id, owner_user_id, plan_amount,
+               received_amount, status
+        FROM crm_receivable
+        WHERE id = #{id}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+        FOR UPDATE
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO crm_receivable (receivable_no, contract_id, customer_id, business_id, owner_user_id,
+                                    plan_amount, plan_date, received_amount, received_date, status,
+                                    remark, created_by)
+        VALUES (#{receivableNo}, #{contract}, #{customer}, #{business}, #{owner},
+                #{planAmount}, #{planDate}, #{receivedAmount}, #{receivedDate}, #{status},
+                #{remark}, #{actor})
+    </insert>
+
+    <update id="update">
+        UPDATE crm_receivable SET contract_id = #{contract}, customer_id = #{customer},
+            business_id = #{business}, owner_user_id = #{owner}, plan_amount = #{planAmount},
+            plan_date = #{planDate}, received_amount = #{receivedAmount},
+            received_date = #{receivedDate}, status = #{status}, remark = #{remark}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM crm_receivable WHERE id = #{id}
+    </delete>
+
+    <select id="countByContract" resultType="long">
+        SELECT COUNT(*) FROM crm_receivable WHERE contract_id = #{contract}
+    </select>
+
+    <select id="countByCustomer" resultType="long">
+        SELECT COUNT(*) FROM crm_receivable
+        WHERE customer_id = #{customer}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="listByCustomer" resultType="java.util.LinkedHashMap">
+        SELECT <include refid="columns"/> <include refid="joins"/>
+        WHERE r.customer_id = #{customer}
+        <if test="scopeOwner != null">AND r.owner_user_id = #{scopeOwner}</if>
+        ORDER BY r.plan_date DESC, r.id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="sumPlanByCustomer" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(plan_amount), 0) FROM crm_receivable
+        WHERE customer_id = #{customer}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+    </select>
+
+    <select id="sumReceivedByCustomer" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(received_amount), 0) FROM crm_receivable
+        WHERE customer_id = #{customer}
+        <if test="scopeOwner != null">AND owner_user_id = #{scopeOwner}</if>
+    </select>
+</mapper>

@@ -3,25 +3,44 @@ spring:
     name: enterprise-investment
   datasource:
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/enterprise_db?characterEncoding=UTF-8&connectTimeout=5000}
-    username: ${MYSQL_USER:enterprise}
-    password: ${MYSQL_PASSWORD:enterprise_dev_password}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:123456}
   servlet:
     multipart:
       max-file-size: 5MB
       max-request-size: 6MB
 
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    jdbc-type-for-null: 'NULL'
+    call-setters-on-nulls: true
+
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${SERVER_PORT:8080}
-  servlet:
-    session:
-      timeout: 30m
-      cookie:
-        http-only: true
-        same-site: lax
-        secure: ${SESSION_COOKIE_SECURE:false}
+
+springdoc:
+  api-docs:
+    enabled: ${APP_OPENAPI_ENABLED:false}
+    path: /api/openapi
+  swagger-ui:
+    enabled: ${APP_OPENAPI_ENABLED:false}
+    path: /api/swagger-ui.html
 
 app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}
+  auth:
+    token-ttl-hours: ${APP_TOKEN_TTL_HOURS:12}
+    jwt-secret: ${APP_JWT_SECRET:}
+  bid-radar:
+    base-url: ${BIDRADAR_BASE_URL:http://127.0.0.1:8765}
+  agent:
+    base-url: ${AGENT_BASE_URL:http://127.0.0.1:8766}
+  collector:
+    token: ${COLLECTOR_TOKEN:}
   bootstrap-admin:
     username: ${APP_ADMIN_USERNAME:admin}
     password: ${APP_ADMIN_PASSWORD:}

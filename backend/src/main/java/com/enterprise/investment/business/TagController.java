@@ -1,5 +1,7 @@
 package com.enterprise.investment.business;
 
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.TagMapper;
 import com.enterprise.investment.security.AccountPrincipal;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -23,29 +25,34 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-import static com.enterprise.investment.business.BusinessData.params;
-import static com.enterprise.investment.business.BusinessData.trimmed;
+import static com.enterprise.investment.business.Rows.contains;
+import static com.enterprise.investment.business.Rows.trimmed;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @RestController
 public class TagController {
-    private final BusinessData db;
+    private final TagMapper tags;
+    private final AuditMapper audits;
 
-    TagController(BusinessData db) {
-        this.db = db;
+    TagController(TagMapper tags, AuditMapper audits) {
+        this.tags = tags;
+        this.audits = audits;
     }
 
     @GetMapping("/api/tags")
-    public BusinessData.Page list(@RequestParam(required = false) String keyword,
-                                  @RequestParam(defaultValue = "1") int page,
-                                  @RequestParam(defaultValue = "20") int size) {
-        return db.page("id, tag_name, tag_type", "FROM ent_tag", """
-                 WHERE (:keyword IS NULL OR tag_name LIKE :keyword ESCAPE '!')
-                """, "tag_name, id",
-                params("keyword", trimmed(keyword) == null ? null : BusinessData.contains(keyword)), page, size);
+    @PreAuthorize("@ss.hasPermission('enterprise:view')")
+    public PageResult list(@RequestParam(required = false) String keyword,
+                           @RequestParam(defaultValue = "1") int page,
+                           @RequestParam(defaultValue = "20") int size) {
+        long offset = Paging.offset(page, size);
+        String filterKeyword = trimmed(keyword) == null ? null : contains(keyword);
+        long total = tags.count(filterKeyword);
+        var items = tags.list(filterKeyword, size, offset).stream().map(Rows::view).toList();
+        return new PageResult(items, total);
     }
 
     @PostMapping("/api/tags")
-    @PreAuthorize("hasAnyRole('ADMIN','DATA_STEWARD')")
+    @PreAuthorize("@ss.hasPermission('enterprise:tag:write')")
     @Transactional
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@Valid @RequestBody TagInput input,
@@ -55,43 +62,42 @@ public class TagController {
         if (name == null || type == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请填写标签名称和类型");
         }
-        long id = db.insert("INSERT INTO ent_tag (tag_name, tag_type) VALUES (:name, :type)",
-                params("name", name, "type", type));
-        db.audit(actor.id(), "CREATE", "TAG", id);
-        return BusinessData.view(db.one("SELECT id, tag_name, tag_type FROM ent_tag WHERE id = :id",
-                params("id", id), "标签不存在"));
+        var tag = Rows.params("name", name, "type", type);
+        tags.insert(tag);
+        long id = ((Number) tag.get("id")).longValue();
+        audits.record(actor.id(), "CREATE", "TAG", id);
+        return Rows.view(Rows.required(tags.findById(id), "标签不存在"));
     }
 
     @GetMapping("/api/enterprises/{id}/tags")
+    @PreAuthorize("@ss.hasPermission('enterprise:view')")
     public List<Map<String, Object>> assigned(@PathVariable long id) {
-        db.one("SELECT id FROM ent_enterprise WHERE id = :id", params("id", id), "企业不存在");
-        return db.query("""
-                SELECT t.id, t.tag_name, t.tag_type
-                FROM ent_tag t JOIN ent_enterprise_tag et ON et.tag_id = t.id
-                WHERE et.enterprise_id = :id ORDER BY t.tag_name, t.id
-                """, params("id", id)).stream().map(BusinessData::view).toList();
+        if (tags.existsEnterprise(id) == null) {
+            throw new ResponseStatusException(NOT_FOUND, "企业不存在");
+        }
+        return tags.assigned(id).stream().map(Rows::view).toList();
     }
 
     @PutMapping("/api/enterprises/{id}/tags")
-    @PreAuthorize("hasAnyRole('ADMIN','DATA_STEWARD')")
+    @PreAuthorize("@ss.hasPermission('enterprise:tag:write')")
     @Transactional
     public List<Map<String, Object>> replace(@PathVariable long id, @Valid @RequestBody TagsInput input,
                                              @AuthenticationPrincipal AccountPrincipal actor) {
-        db.one("SELECT id FROM ent_enterprise WHERE id = :id FOR UPDATE", params("id", id), "企业不存在");
-        List<Long> tags = input.tagIds();
-        if (new HashSet<>(tags).size() != tags.size()) {
+        if (tags.lockEnterprise(id) == null) {
+            throw new ResponseStatusException(NOT_FOUND, "企业不存在");
+        }
+        List<Long> selected = input.tagIds();
+        if (new HashSet<>(selected).size() != selected.size()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标签不能重复");
         }
-        if (!tags.isEmpty() && db.query("SELECT id FROM ent_tag WHERE id IN (:tags) FOR SHARE",
-                params("tags", tags)).size() != tags.size()) {
+        if (!selected.isEmpty() && tags.countExisting(selected) != selected.size()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "所选标签不存在");
         }
-        db.update("DELETE FROM ent_enterprise_tag WHERE enterprise_id = :id", params("id", id));
-        for (Long tag : tags) {
-            db.update("INSERT INTO ent_enterprise_tag (enterprise_id, tag_id) VALUES (:enterprise, :tag)",
-                    params("enterprise", id, "tag", tag));
+        tags.clearEnterpriseTags(id);
+        for (Long tag : selected) {
+            tags.assignEnterpriseTag(id, tag);
         }
-        db.audit(actor.id(), "UPDATE", "ENTERPRISE_TAG", id);
+        audits.record(actor.id(), "UPDATE", "ENTERPRISE_TAG", id);
         return assigned(id);
     }
 

@@ -1,20 +1,21 @@
 package com.enterprise.investment.security;
 
+import com.enterprise.investment.mapper.AccountMapper;
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.RoleMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.sql.PreparedStatement;
-import java.sql.Statement;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -24,74 +25,89 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 class AccountDirectory {
     static final String USERNAME_PATTERN = "[A-Za-z0-9._-]{3,64}";
-    static final String ROLE_PATTERN = "ADMIN|DATA_STEWARD|INVESTMENT_MANAGER|INVESTMENT_OFFICER";
 
-    private final JdbcTemplate jdbc;
+    private final AccountMapper accounts;
+    private final AuditMapper audits;
+    private final RoleMapper roles;
     private final PasswordEncoder passwords;
     private final String absentAccountHash;
 
-    AccountDirectory(JdbcTemplate jdbc, PasswordEncoder passwords) {
-        this.jdbc = jdbc;
+    AccountDirectory(AccountMapper accounts, AuditMapper audits, RoleMapper roles, PasswordEncoder passwords) {
+        this.accounts = accounts;
+        this.audits = audits;
+        this.roles = roles;
         this.passwords = passwords;
         this.absentAccountHash = passwords.encode(UUID.randomUUID().toString());
     }
 
     Optional<AccountPrincipal> authenticate(String username, String password) {
-        Optional<StoredAccount> account = jdbc.query("""
-                SELECT id, username, role, password_hash FROM sys_user
-                WHERE username = ? AND enabled = TRUE
-                """, (row, index) -> new StoredAccount(
-                new AccountPrincipal(row.getLong("id"), row.getString("username"), row.getString("role")),
-                row.getString("password_hash")), username).stream().findFirst();
+        Map<String, Object> account = accounts.findByUsername(username);
+        String hash = account == null ? absentAccountHash : (String) account.get("password_hash");
+        boolean matches = passwords.matches(password, hash);
+        if (account == null || !matches) {
+            return Optional.empty();
+        }
+        long id = ((Number) account.get("id")).longValue();
+        return Optional.of(principal(id, (String) account.get("username"),
+                (String) account.get("role"), hash));
+    }
 
-        String hash = account.map(StoredAccount::passwordHash).orElse(absentAccountHash);
-        return passwords.matches(password, hash) ? account.map(stored -> new AccountPrincipal(
-                stored.principal().id(), stored.principal().username(), stored.principal().role(),
-                version(stored.passwordHash()))) : Optional.empty();
+    Optional<AccountPrincipal> loadPrincipal(long id) {
+        Map<String, Object> account = accounts.findCurrent(id);
+        if (account == null) {
+            return Optional.empty();
+        }
+        return Optional.of(principal(id, (String) account.get("username"),
+                (String) account.get("role"), (String) account.get("password_hash")));
+    }
+
+    private AccountPrincipal principal(long id, String username, String role, String passwordHash) {
+        Set<String> permissions = new HashSet<>(roles.permissionCodesOf(id));
+        List<AccountPrincipal.Menu> menus = roles.menusOf(id).stream()
+                .map(row -> new AccountPrincipal.Menu(
+                        text(row, "menuKey", "menu_key"),
+                        text(row, "label", "label"),
+                        text(row, "menuGroup", "menu_group")))
+                .toList();
+        return new AccountPrincipal(id, username, role, permissions, menus, version(passwordHash));
+    }
+
+    private static String text(Map<String, Object> row, String camel, String snake) {
+        Object value = row.get(camel);
+        if (value == null) {
+            value = row.get(snake);
+        }
+        return value == null ? "" : String.valueOf(value);
     }
 
     List<AccountSummary> list(boolean administrator) {
-        return jdbc.query("""
-                SELECT id, username, role, enabled FROM sys_user
-                WHERE ? OR (enabled = TRUE AND role <> 'DATA_STEWARD')
-                ORDER BY username, id
-                """, (row, index) -> new AccountSummary(
-                row.getLong("id"), row.getString("username"), row.getString("role"), row.getBoolean("enabled")),
-                administrator);
-    }
-
-    boolean isCurrent(AccountPrincipal actor) {
-        return jdbc.query("""
-                SELECT username, role, password_hash FROM sys_user WHERE id = ? AND enabled = TRUE
-                """, (row, index) -> actor.username().equals(row.getString("username"))
-                && actor.role().equals(row.getString("role"))
-                && version(row.getString("password_hash")).equals(actor.credentialVersion()), actor.id())
-                .stream().findFirst().orElse(false);
+        return accounts.list(administrator).stream()
+                .map(row -> new AccountSummary(((Number) row.get("id")).longValue(),
+                        (String) row.get("username"), (String) row.get("role"), isEnabled(row.get("enabled"))))
+                .toList();
     }
 
     AccountPrincipal create(String username, String password, String role) {
+        Long roleId = roles.findEnabledRoleIdByCode(role);
+        if (roleId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "角色不存在或已停用");
+        }
         String hash = passwords.encode(password);
-        GeneratedKeyHolder keys = new GeneratedKeyHolder();
-        jdbc.update(connection -> {
-            PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO sys_user (username, password_hash, role, enabled) VALUES (?, ?, ?, TRUE)
-                    """, Statement.RETURN_GENERATED_KEYS);
-            statement.setString(1, username);
-            statement.setString(2, hash);
-            statement.setString(3, role);
-            return statement;
-        }, keys);
-        return new AccountPrincipal(Objects.requireNonNull(keys.getKey()).longValue(), username, role);
+        Map<String, Object> user = new HashMap<>();
+        user.put("username", username);
+        user.put("passwordHash", hash);
+        user.put("role", role);
+        accounts.insert(user);
+        long id = ((Number) user.get("id")).longValue();
+        roles.insertUserRole(id, roleId);
+        return new AccountPrincipal(id, username, role);
     }
 
     @Transactional
     public AccountPrincipal createAs(AccountPrincipal actor, String username, String password, String role) {
         lockAdministrators(actor);
         AccountPrincipal account = create(username, password, role);
-        jdbc.update("""
-                INSERT INTO audit_log (user_id, operation, resource_type, resource_id)
-                VALUES (?, 'USER_CREATE', 'sys_user', ?)
-                """, actor.id(), account.id());
+        audits.record(actor.id(), "USER_CREATE", "sys_user", account.id());
         return account;
     }
 
@@ -116,6 +132,23 @@ class AccountDirectory {
     }
 
     @Transactional
+    public void changeRole(AccountPrincipal actor, long id, String role) {
+        lockAdministrators(actor);
+        lockAccount(id);
+        if (actor.id() == id) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "不能修改当前登录账号的角色");
+        }
+        Long roleId = roles.findEnabledRoleIdByCode(role);
+        if (roleId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "角色不存在或已停用");
+        }
+        accounts.updateRole(id, role);
+        roles.deleteUserRoles(id);
+        roles.insertUserRole(id, roleId);
+        audit(actor.id(), "USER_ROLE", id);
+    }
+
+    @Transactional
     public void setEnabled(AccountPrincipal actor, long id, boolean enabled) {
         List<Map<String, Object>> admins = lockAdministrators(actor);
         Map<String, Object> target = lockAccount(id);
@@ -127,16 +160,13 @@ class AccountDirectory {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "至少需要保留一个启用的管理员");
         }
         if (enabled != isEnabled(target.get("enabled"))) {
-            jdbc.update("UPDATE sys_user SET enabled = ? WHERE id = ?", enabled, id);
+            accounts.updateEnabled(id, enabled);
             audit(actor.id(), enabled ? "USER_ENABLE" : "USER_DISABLE", id);
         }
     }
 
     private List<Map<String, Object>> lockAdministrators(AccountPrincipal actor) {
-        List<Map<String, Object>> admins = jdbc.queryForList("""
-                SELECT id, password_hash FROM sys_user
-                WHERE role = 'ADMIN' AND enabled = TRUE ORDER BY id FOR UPDATE
-                """);
+        List<Map<String, Object>> admins = accounts.lockAdministrators();
         boolean current = admins.stream().anyMatch(row ->
                 ((Number) row.get("id")).longValue() == actor.id()
                         && version((String) row.get("password_hash")).equals(actor.credentialVersion()));
@@ -147,13 +177,15 @@ class AccountDirectory {
     }
 
     private Map<String, Object> lockAccount(long id) {
-        return jdbc.queryForList("SELECT id, role, enabled, password_hash FROM sys_user WHERE id = ? FOR UPDATE", id)
-                .stream().findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "账号不存在"));
+        Map<String, Object> row = accounts.lockById(id);
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "账号不存在");
+        }
+        return row;
     }
 
     private void updatePassword(long id, String password) {
-        jdbc.update("UPDATE sys_user SET password_hash = ? WHERE id = ?", passwords.encode(password), id);
+        accounts.updatePassword(id, passwords.encode(password));
     }
 
     private static boolean isEnabled(Object value) {
@@ -161,10 +193,7 @@ class AccountDirectory {
     }
 
     private void audit(long actor, String operation, long target) {
-        jdbc.update("""
-                INSERT INTO audit_log (user_id, operation, resource_type, resource_id)
-                VALUES (?, ?, 'sys_user', ?)
-                """, actor, operation, target);
+        audits.record(actor, operation, "sys_user", target);
     }
 
     private static String version(String hash) {
@@ -176,7 +205,8 @@ class AccountDirectory {
         }
     }
 
-    void bootstrap(String username, String password) {
+    @Transactional
+    public void bootstrap(String username, String password) {
         if (hasEnabledAdmin()) {
             return;
         }
@@ -202,11 +232,7 @@ class AccountDirectory {
     }
 
     private boolean hasEnabledAdmin() {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM sys_user WHERE enabled = TRUE AND role = 'ADMIN')", Boolean.class));
-    }
-
-    private record StoredAccount(AccountPrincipal principal, String passwordHash) {
+        return accounts.countEnabledAdmins() > 0;
     }
 
     record AccountSummary(long id, String username, String role, boolean enabled) {

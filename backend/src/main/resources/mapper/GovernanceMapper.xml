@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.GovernanceMapper">
+
+    <sql id="historyFrom">
+        FROM ent_enterprise_change c
+        LEFT JOIN sys_user u ON u.id = c.changed_by
+        LEFT JOIN data_source_record r ON r.id = c.source_record_id
+        LEFT JOIN data_source s ON s.id = r.source_id
+    </sql>
+
+    <select id="countHistory" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise_change c WHERE c.enterprise_id = #{enterprise}
+    </select>
+
+    <select id="history" resultType="java.util.LinkedHashMap">
+        SELECT c.id, c.field_name, c.old_value, c.new_value, c.created_at,
+               u.username AS changed_by_username, s.source_name
+        <include refid="historyFrom"/>
+        WHERE c.enterprise_id = #{enterprise}
+        ORDER BY c.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <sql id="importFrom">
+        FROM data_import_batch b
+        LEFT JOIN sys_user u ON u.id = b.created_by
+        JOIN data_source s ON s.id = b.source_id
+    </sql>
+
+    <select id="countImports" resultType="long">
+        SELECT COUNT(*) FROM data_import_batch
+    </select>
+
+    <select id="imports" resultType="java.util.LinkedHashMap">
+        SELECT b.id, b.file_name, b.total_count, b.success_count, b.fail_count, b.status,
+               b.created_at, b.finished_at, u.username AS created_by_username, s.source_name
+        <include refid="importFrom"/>
+        ORDER BY b.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="existsImportBatch" resultType="long">
+        SELECT id FROM data_import_batch WHERE id = #{id}
+    </select>
+
+    <sql id="importRowFilter">
+        WHERE r.import_batch_id = #{id}
+        <if test="failuresOnly">AND r.parse_status = 'FAILED'</if>
+    </sql>
+
+    <select id="countImportRows" resultType="long">
+        SELECT COUNT(*) FROM data_source_record r
+        <include refid="importRowFilter"/>
+    </select>
+
+    <select id="importRows" resultType="java.util.LinkedHashMap">
+        SELECT r.id, r.external_id AS `row_number`, r.enterprise_id, r.parse_status, r.parse_error,
+               JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.name')) AS enterprise_name,
+               JSON_UNQUOTE(JSON_EXTRACT(r.raw_payload, '$.uscc')) AS uscc, r.created_at
+        FROM data_source_record r
+        <include refid="importRowFilter"/>
+        ORDER BY CAST(r.external_id AS UNSIGNED), r.id
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+</mapper>

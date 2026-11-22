@@ -5,7 +5,7 @@ export type Option = { value: string | number; label: string }
 export type Field = {
   key: string
   label: string
-  kind?: 'number' | 'decimal' | 'date' | 'datetime' | 'text' | 'password' | 'select' | 'enterprise' | 'project' | 'user'
+  kind?: 'number' | 'decimal' | 'date' | 'datetime' | 'text' | 'password' | 'select' | 'enterprise' | 'project' | 'user' | 'province' | 'city' | 'district'
   options?: Option[]
   placeholder?: string
   required?: boolean
@@ -39,6 +39,17 @@ export const leadStages: Option[] = [
   { value: 'CONTACTED', label: '已联系' },
   { value: 'NEGOTIATING', label: '洽谈中' },
   { value: 'WON', label: '已落地' },
+  { value: 'LOST', label: '已流失' },
+  { value: 'PENDING_REVIEW', label: '待审核' },
+  { value: 'REJECTED', label: '已驳回' },
+]
+
+export const businessStages: Option[] = [
+  { value: 'NEW', label: '新商机' },
+  { value: 'QUALIFIED', label: '已确认' },
+  { value: 'CONTACTED', label: '已联系' },
+  { value: 'NEGOTIATING', label: '洽谈中' },
+  { value: 'WON', label: '已赢单' },
   { value: 'LOST', label: '已流失' },
 ]
 
@@ -82,9 +93,9 @@ export const sections: Record<SectionKey, Section> = {
       { key: 'uscc', label: '统一社会信用代码', max: 18 },
       { key: 'enterpriseType', label: '企业类型', max: 50 },
       { key: 'businessStatus', label: '经营状态', max: 30 },
-      { key: 'provinceCode', label: '省份代码', max: 12 },
-      { key: 'cityCode', label: '城市代码', max: 12 },
-      { key: 'districtCode', label: '区县代码', max: 12 },
+      { key: 'provinceCode', label: '省份', kind: 'province', max: 12 },
+      { key: 'cityCode', label: '城市', kind: 'city', max: 12 },
+      { key: 'districtCode', label: '区县', kind: 'district', max: 12 },
       { key: 'industryCode', label: '行业代码', max: 20 },
       { key: 'industryName', label: '行业名称', max: 100 },
       { key: 'registeredCapital', label: '注册资本（元）', kind: 'decimal', max: 19 },
@@ -96,8 +107,8 @@ export const sections: Record<SectionKey, Section> = {
     ],
     filters: [
       { key: 'keyword', label: '企业名称或信用代码' },
-      { key: 'provinceCode', label: '省份代码' },
-      { key: 'cityCode', label: '城市代码' },
+      { key: 'provinceCode', label: '省份', kind: 'province' },
+      { key: 'cityCode', label: '城市', kind: 'city' },
       { key: 'industryCode', label: '行业代码' },
       { key: 'businessStatus', label: '经营状态' },
     ],
@@ -119,8 +130,8 @@ export const sections: Record<SectionKey, Section> = {
     fields: [
       { key: 'projectName', label: '项目名称', required: true, max: 255 },
       { key: 'projectStatus', label: '项目状态', kind: 'select', options: projectStatuses },
-      { key: 'provinceCode', label: '招商省份代码', max: 12 },
-      { key: 'cityCode', label: '招商城市代码', max: 12 },
+      { key: 'provinceCode', label: '招商省份', kind: 'province', max: 12 },
+      { key: 'cityCode', label: '招商城市', kind: 'city', max: 12 },
       { key: 'industryCode', label: '目标行业代码', max: 20 },
       { key: 'ownerId', label: '负责人', kind: 'user' },
       { key: 'investmentMin', label: '最低投资（元）', kind: 'decimal', max: 19 },

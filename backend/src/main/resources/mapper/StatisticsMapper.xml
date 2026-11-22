@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.enterprise.investment.mapper.StatisticsMapper">
+
+    <select id="countEnterprises" resultType="long">
+        SELECT COUNT(*) FROM ent_enterprise
+    </select>
+
+    <select id="countLeads" resultType="long">
+        SELECT COUNT(*) FROM crm_lead
+        <where><if test="owner != null">owner_id = #{owner}</if></where>
+    </select>
+
+    <select id="countBusinesses" resultType="long">
+        SELECT COUNT(*) FROM crm_business
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+    </select>
+
+    <select id="countWonBusinesses" resultType="long">
+        SELECT COUNT(*) FROM crm_business
+        WHERE stage = 'WON'
+        <if test="owner != null">AND owner_user_id = #{owner}</if>
+    </select>
+
+    <select id="countContracts" resultType="long">
+        SELECT COUNT(*) FROM crm_contract
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+    </select>
+
+    <select id="sumContractAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(amount), 0) FROM crm_contract
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+    </select>
+
+    <select id="sumReceivablePlan" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(plan_amount), 0) FROM crm_receivable
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+    </select>
+
+    <select id="sumReceivableReceived" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(received_amount), 0) FROM crm_receivable
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+    </select>
+
+    <select id="stageCounts" resultType="java.util.LinkedHashMap">
+        SELECT stage, COUNT(*) AS count
+        FROM crm_business
+        <where><if test="owner != null">owner_user_id = #{owner}</if></where>
+        GROUP BY stage
+        ORDER BY FIELD(stage, 'NEW', 'QUALIFIED', 'CONTACTED', 'NEGOTIATING', 'WON', 'LOST')
+    </select>
+
+    <select id="ownerPerformance" resultType="java.util.LinkedHashMap">
+        SELECT u.username AS owner,
+               (SELECT COUNT(*) FROM crm_lead l WHERE l.owner_id = u.id) AS leadCount,
+               (SELECT COUNT(*) FROM crm_business b WHERE b.owner_user_id = u.id) AS businessCount,
+               (SELECT COUNT(*) FROM crm_business b WHERE b.owner_user_id = u.id AND b.stage = 'WON') AS wonCount,
+               (SELECT COALESCE(SUM(c.amount), 0) FROM crm_contract c WHERE c.owner_user_id = u.id) AS contractAmount,
+               (SELECT COALESCE(SUM(r.received_amount), 0) FROM crm_receivable r
+                WHERE r.owner_user_id = u.id) AS receivedAmount
+        FROM sys_user u
+        WHERE u.enabled = TRUE
+        <if test="owner != null">AND u.id = #{owner}</if>
+        ORDER BY contractAmount DESC, u.username
+    </select>
+</mapper>

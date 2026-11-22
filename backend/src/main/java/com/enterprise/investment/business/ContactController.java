@@ -1,6 +1,9 @@
 package com.enterprise.investment.business;
 
+import com.enterprise.investment.mapper.AuditMapper;
+import com.enterprise.investment.mapper.ContactMapper;
 import com.enterprise.investment.security.AccountPrincipal;
+import com.enterprise.investment.security.DataScopeResolver;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -24,23 +27,26 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-import static com.enterprise.investment.business.BusinessData.params;
-import static com.enterprise.investment.business.BusinessData.trimmed;
+import static com.enterprise.investment.business.Rows.contains;
+import static com.enterprise.investment.business.Rows.params;
+import static com.enterprise.investment.business.Rows.trimmed;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @RestController
 @RequestMapping("/api/enterprises/{enterpriseId}/contacts")
-@PreAuthorize("hasAnyRole('ADMIN','INVESTMENT_MANAGER','INVESTMENT_OFFICER')")
+@PreAuthorize("@ss.hasPermission('contact:view')")
 public class ContactController {
-    private static final String FIELDS = """
-            id, enterprise_id, name, position, phone_ciphertext, email_ciphertext, created_at, updated_at
-            """;
-
-    private final BusinessData db;
+    private final ContactMapper contacts;
     private final ContactEncryption encryption;
+    private final AuditMapper audits;
+    private final DataScopeResolver scopes;
 
-    ContactController(BusinessData db, ContactEncryption encryption) {
-        this.db = db;
+    ContactController(ContactMapper contacts, ContactEncryption encryption, AuditMapper audits,
+                      DataScopeResolver scopes) {
+        this.contacts = contacts;
         this.encryption = encryption;
+        this.audits = audits;
+        this.scopes = scopes;
     }
 
     @GetMapping
@@ -51,11 +57,11 @@ public class ContactController {
                             @RequestParam(defaultValue = "20") int size,
                             @AuthenticationPrincipal AccountPrincipal actor) {
         checkEnterpriseAccess(enterpriseId, actor);
-        var result = db.page(FIELDS, "FROM crm_contact", """
-                 WHERE enterprise_id = :enterprise AND (:keyword IS NULL OR name LIKE :keyword ESCAPE '!')
-                """, "id DESC", params("enterprise", enterpriseId,
-                "keyword", trimmed(keyword) == null ? null : BusinessData.contains(keyword)), page, size);
-        return new ContactPage(result.items().stream().map(this::view).toList(), result.total());
+        long offset = Paging.offset(page, size);
+        String filterKeyword = trimmed(keyword) == null ? null : contains(keyword);
+        long total = contacts.count(enterpriseId, filterKeyword);
+        var items = contacts.list(enterpriseId, filterKeyword, size, offset).stream().map(this::view).toList();
+        return new ContactPage(items, total);
     }
 
     @GetMapping("/{id}")
@@ -67,23 +73,24 @@ public class ContactController {
     }
 
     @PostMapping
+    @PreAuthorize("@ss.hasPermission('contact:write')")
     @Transactional
     @ResponseStatus(HttpStatus.CREATED)
     public ContactView create(@PathVariable long enterpriseId, @Valid @RequestBody ContactInput input,
                               @AuthenticationPrincipal AccountPrincipal actor) {
         checkEnterpriseAccess(enterpriseId, actor);
         validateInput(input);
-        long id = db.insert("""
-                INSERT INTO crm_contact (enterprise_id, name, position)
-                VALUES (:enterprise, :name, :position)
-                """, params("enterprise", enterpriseId, "name", trimmed(input.name()),
-                "position", trimmed(input.position())));
+        var values = params("enterprise", enterpriseId, "name", trimmed(input.name()),
+                "position", trimmed(input.position()));
+        contacts.insert(values);
+        long id = ((Number) values.get("id")).longValue();
         saveSensitiveFields(enterpriseId, id, input);
-        db.audit(actor.id(), "CREATE", "CONTACT", id);
+        audits.record(actor.id(), "CREATE", "CONTACT", id);
         return view(find(enterpriseId, id, false));
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("@ss.hasPermission('contact:write')")
     @Transactional
     public ContactView replace(@PathVariable long enterpriseId, @PathVariable long id,
                                @Valid @RequestBody ContactInput input,
@@ -91,55 +98,47 @@ public class ContactController {
         checkEnterpriseAccess(enterpriseId, actor);
         find(enterpriseId, id, true);
         validateInput(input);
-        db.update("UPDATE crm_contact SET name = :name, position = :position WHERE id = :id",
-                params("id", id, "name", trimmed(input.name()), "position", trimmed(input.position())));
+        contacts.updateBasic(id, trimmed(input.name()), trimmed(input.position()));
         saveSensitiveFields(enterpriseId, id, input);
-        db.audit(actor.id(), "UPDATE", "CONTACT", id);
+        audits.record(actor.id(), "UPDATE", "CONTACT", id);
         return view(find(enterpriseId, id, false));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN','INVESTMENT_MANAGER')")
+    @PreAuthorize("@ss.hasPermission('contact:delete')")
     @Transactional
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable long enterpriseId, @PathVariable long id,
                        @AuthenticationPrincipal AccountPrincipal actor) {
         checkEnterpriseAccess(enterpriseId, actor);
         find(enterpriseId, id, true);
-        if (!db.query("SELECT id FROM crm_followup WHERE contact_id = :id LIMIT 1 FOR UPDATE",
-                params("id", id)).isEmpty()) {
+        if (contacts.lockFollowup(id) != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "该联系人已有跟进记录，无法删除");
         }
-        db.update("DELETE FROM crm_contact WHERE id = :id", params("id", id));
-        db.audit(actor.id(), "DELETE", "CONTACT", id);
+        contacts.delete(id);
+        audits.record(actor.id(), "DELETE", "CONTACT", id);
     }
 
     private void checkEnterpriseAccess(long enterpriseId, AccountPrincipal actor) {
-        Long owner = "INVESTMENT_OFFICER".equals(actor.role()) ? actor.id() : null;
-        db.one("""
-                SELECT e.id FROM ent_enterprise e
-                WHERE e.id = :enterprise
-                  AND (:owner IS NULL OR EXISTS (
-                    SELECT 1 FROM crm_lead l WHERE l.enterprise_id = e.id AND l.owner_id = :owner
-                  ))
-                """, params("enterprise", enterpriseId, "owner", owner), "企业不存在或没有联系人访问权限");
+        Long owner = scopes.contactOwner(actor);
+        if (contacts.findAccessibleEnterprise(enterpriseId, owner) == null) {
+            throw new ResponseStatusException(NOT_FOUND, "企业不存在或没有联系人访问权限");
+        }
     }
 
     private Map<String, Object> find(long enterpriseId, long id, boolean lock) {
-        return db.one("SELECT " + FIELDS + " FROM crm_contact WHERE enterprise_id = :enterprise AND id = :id"
-                        + (lock ? " FOR UPDATE" : ""),
-                params("enterprise", enterpriseId, "id", id), "联系人不存在");
+        var row = lock ? contacts.findByIdForUpdate(enterpriseId, id) : contacts.findById(enterpriseId, id);
+        return Rows.required(row, "联系人不存在");
     }
 
     private void saveSensitiveFields(long enterpriseId, long id, ContactInput input) {
         byte[] phone = encryption.encrypt(trimmed(input.phone()), enterpriseId, id, "phone");
         byte[] email = encryption.encrypt(trimmed(input.email()), enterpriseId, id, "email");
-        db.update("UPDATE crm_contact SET phone_ciphertext = :phone, email_ciphertext = :email WHERE id = :id",
-                params("id", id, "phone", phone, "email", email));
+        contacts.updateSensitive(id, phone, email);
     }
 
     private ContactView view(Map<String, Object> row) {
-        var fields = BusinessData.view(row);
+        var fields = Rows.view(row);
         long id = ((Number) fields.get("id")).longValue();
         long enterprise = ((Number) fields.get("enterpriseId")).longValue();
         return new ContactView(id, enterprise, (String) fields.get("name"), (String) fields.get("position"),
